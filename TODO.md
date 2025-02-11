@@ -21,5 +21,10 @@ bestmove time 00:00:05
 
 Il MzingaViewer, invece, è un'interfaccia grafica che utilizza l'engine.
 
+# Generate elf/exe
+```
+pyinstaller ./src/engine.py --name BeesKneesEngine --noconsole --onefile
+```
+
 # TODO
-Fare interazione con l'engine è facile, non so come connettere la partita corrente con il viewer per vedere mentre le IA giocano (non so se serve). 
+- test tra le engines rispetto ai cambi

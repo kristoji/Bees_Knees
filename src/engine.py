@@ -1,0 +1,120 @@
+from typing import TypeGuard, Final, Optional
+from enums import Command, InvalidMoveError, Error
+from board import Board
+from game import Move
+from ai import Brain, Random
+from copy import deepcopy
+
+class Engine:
+    VERSION: Final[str] = "0.0.0"
+
+    def __init__(self) -> None:
+        self.board: Optional[Board] = None
+        self.brain: Brain = Random()
+
+    @property
+    def is_active(self) -> TypeGuard[Board]:
+        return self.board is not None
+
+    def start(self) -> None:
+        self.info()
+        while True:
+            print("ok")
+            parts = input().strip().split()
+            try:
+                match parts:
+                    case [Command.INFO]:
+                        self.info()
+                    case [Command.HELP, *args]:
+                        self.help(args)
+                    case [Command.OPTIONS]:
+                        pass
+                    case [Command.NEWGAME, *args]:
+                        self.newgame(args)
+                    case [Command.VALIDMOVES]:
+                        self.validmoves()
+                    case [Command.BESTMOVE, restriction, value]:
+                        self.bestmove(restriction, value)
+                    case [Command.PLAY, move]:
+                        self.play(move)
+                    case [Command.PLAY, part1, part2]:
+                        self.play(f"{part1} {part2}")
+                    case [Command.PASS]:
+                        self.play(Move.PASS)
+                    case [Command.UNDO, *args]:
+                        self.undo(args)
+                    case [Command.EXIT]:
+                        print("ok")
+                        break
+                    case _:
+                        raise Error("Invalid command. Try 'help' to see a list of valid commands and usage")
+            
+            except InvalidMoveError as e:
+                print(e)
+            except Error as e:
+                print(e)
+
+    def info(self) -> None:
+        print(f"id BeesKneesEngine v{self.VERSION}")
+        print("Mosquito;Ladybug;Pillbug")
+
+    def help(self, args: list[str]) -> None:
+        if args:
+            if len(args) > 1:
+                raise Error(f"Too many arguments for '{Command.HELP}'")
+            else:
+                cmd = args[0]
+                if details := Command.help_details(cmd):
+                    print(details)
+                else:
+                    raise Error(f"Unknown command '{cmd}'")
+        else:
+            print("Available commands:")
+            print("\n".join(f"  {cmd}" for cmd in Command))
+            print(f"Try '{Command.HELP} <command>' for details.")
+
+    def newgame(self, args: list[str]) -> None:
+        self.board = Board(" ".join(args))
+        print(self.board)
+
+    def validmoves(self) -> None:
+        if self.is_active:
+            print(self.board.valid_moves)
+        else:
+            raise Error("No game in progress. Try 'newgame' to start a new game.")
+
+    def bestmove(self, restriction: str, value: str) -> None:
+        if self.is_active:
+            print(self.brain.calculate_best_move(deepcopy(self.board)))
+        else:
+            raise Error("No game in progress. Try 'newgame' to start a new game.")
+
+    def play(self, move: str) -> None:
+        if self.is_active:
+            self.board.play(move)
+            self.brain.empty_cache()
+            print(self.board)
+        else:
+            raise Error("No game in progress. Try 'newgame' to start a new game.")
+
+    def undo(self, args: list[str]) -> None:
+        if self.is_active:
+            if len(args) <= 1:
+                if args:
+                    amount = args[0]
+                    if amount.isdigit():
+                        self.board.undo(int(amount))
+                    else:
+                        raise Error(f"Expected a positive integer but got '{amount}'")
+                else:
+                    self.board.undo()
+                self.brain.empty_cache()
+                print(self.board)
+            else:
+                raise Error(f"Too many arguments for '{Command.UNDO}'")
+        else:
+            raise Error("No game in progress. Try 'newgame' to start a new game.")
+
+
+if __name__ == "__main__":
+    Engine().start()
