@@ -42,7 +42,7 @@ class Command(StrEnum):
                 "  See https://github.com/jonthysell/Mzinga/wiki/UniversalHiveProtocol#validmoves."
             ),
             Command.BESTMOVE: (
-                f"  {Command.BESTMOVE} time MaxTime\n  {Command.BESTMOVE} depth MaxTime\n\n"
+                f"  {Command.BESTMOVE} time MaxTime\n  {Command.BESTMOVE} depth MaxDepth\n\n"
                 "  Searches for the best move. Limit by time (hh:mm:ss) or depth.\n"
                 "  See https://github.com/jonthysell/Mzinga/wiki/UniversalHiveProtocol#bestmove."
             ),

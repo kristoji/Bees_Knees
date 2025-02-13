@@ -6,7 +6,6 @@ import re
 
 class Board:
     ORIGIN: Final[Position] = Position(0, 0)
-    # changes made here: dict instead of tuple
     NEIGHBOR_DELTAS: Final[
         dict[Direction, Position]
     ] = {
@@ -27,7 +26,7 @@ class Board:
         self.turn: int = turn
         self.move_strings: list[str] = []
         self.moves: list[Optional[Move]] = []
-        self._valid_moves_cache: Optional[Set[Move]] = None
+        self._valid_moves_cache: dict[PlayerColor, Optional[Set[Move]]] = {PlayerColor.WHITE: None, PlayerColor.BLACK: None}
         self._pos_to_bug: dict[Position, list[Bug]] = {}
         self._bug_to_pos: dict[Bug, Optional[Position]] = {}
         for color in PlayerColor:
@@ -54,20 +53,23 @@ class Board:
 
     @property
     def current_player_color(self) -> PlayerColor:
-        return list(PlayerColor)[self.turn % 2]
+        return PlayerColor.WHITE if self.turn % 2 == 0 else PlayerColor.BLACK
+    
+    @property 
+    def other_player_color(self) -> PlayerColor:
+        return PlayerColor.WHITE if self.turn % 2 == 1 else PlayerColor.BLACK
 
     @property
     def current_player_turn(self) -> int:
         return 1 + self.turn // 2
 
-    # better as attribute?
     @property
     def current_player_queen_in_play(self) -> bool:
         return bool(self._bug_to_pos.get(Bug(self.current_player_color, BugType.QUEEN_BEE)))
 
     @property
     def valid_moves(self) -> str:
-        return ";".join(self.stringify_move(m) for m in self._get_valid_moves()) or Move.PASS
+        return ";".join(self.stringify_move(m) for m in self.get_valid_moves()) or Move.PASS
 
     def play(self, move_string: str) -> None:
         move = self._parse_move(move_string)
@@ -77,20 +79,14 @@ class Board:
             self.turn += 1
             self.move_strings.append(move_string)
             self.moves.append(move)
-            self._valid_moves_cache = None
+            self._valid_moves_cache[self.other_player_color] = None
             if move:
                 self._bug_to_pos[move.bug] = move.destination
                 if move.origin:
                     self._pos_to_bug[move.origin].pop()
                 self._pos_to_bug.setdefault(move.destination, []).append(move.bug)
-                bq = self._bug_to_pos.get(Bug(PlayerColor.BLACK, BugType.QUEEN_BEE))
-                black_queen_surrounded = bq and all(
-                    self._bugs_from_pos(self._get_neighbor(bq, d)) for d in Direction.flat()
-                )
-                wq = self._bug_to_pos.get(Bug(PlayerColor.WHITE, BugType.QUEEN_BEE))
-                white_queen_surrounded = wq and all(
-                    self._bugs_from_pos(self._get_neighbor(wq, d)) for d in Direction.flat()
-                )
+                black_queen_surrounded = self.count_queen_neighbors(PlayerColor.BLACK) == 6
+                white_queen_surrounded = self.count_queen_neighbors(PlayerColor.WHITE) == 6
                 if black_queen_surrounded and white_queen_surrounded:
                     self.state = GameState.DRAW
                 elif black_queen_surrounded:
@@ -106,7 +102,9 @@ class Board:
         if self.state is not GameState.NOT_STARTED and len(self.moves) >= amount:
             if self.state is not GameState.IN_PROGRESS:
                 self.state = GameState.IN_PROGRESS
-            self._valid_moves_cache = None
+            self._valid_moves_cache[self.current_player_color] = None
+            if amount > 1:
+                self._valid_moves_cache[self.other_player_color] = None
             for _ in range(amount):
                 self.turn -= 1
                 self.move_strings.pop()
@@ -138,6 +136,12 @@ class Board:
                         break
             return Move.stringify(moved, relative, direction)
         return Move.PASS
+
+    def count_queen_neighbors(self, color: PlayerColor = current_player_color) -> int:
+        return sum(
+            bool(self._bugs_from_pos(self._get_neighbor(queen_pos, d)))
+            for d in Direction.flat() 
+        ) if (queen_pos := self._pos_from_bug(Bug(color, BugType.QUEEN_BEE))) else 0
 
     def _parse_turn(self, turn: str) -> int:
         if (match := re.fullmatch(f"({PlayerColor.WHITE}|{PlayerColor.BLACK})\\[(\\d+)\\]", turn)):
@@ -172,74 +176,72 @@ class Board:
         else:
             raise Error(f"Expected {self.turn} moves but got {len(moves)}")
 
-    def _get_valid_moves(self) -> Set[Move]:
-        if self._valid_moves_cache is None:
-            self._valid_moves_cache = set()
+    def get_valid_moves(self, color: PlayerColor = None) -> Set[Move]:
+        if color is None:
+            color = self.current_player_color
+        if self._valid_moves_cache[color] is None:
+            moves = set()
             if self.state in (GameState.NOT_STARTED, GameState.IN_PROGRESS):
                 for bug, pos in self._bug_to_pos.items():
-                    if bug.color is self.current_player_color:
+                    if bug.color is color:
                         if self.turn == 0:
                             if bug.type is not BugType.QUEEN_BEE and self._can_bug_be_played(bug):
-                                self._valid_moves_cache.add(Move(bug, None, self.ORIGIN))
+                                moves.add(Move(bug, None, self.ORIGIN))
                         elif self.turn == 1:
                             if bug.type is not BugType.QUEEN_BEE and self._can_bug_be_played(bug):
-                                self._valid_moves_cache.update(
+                                moves.update(
                                     Move(bug, None, self._get_neighbor(self.ORIGIN, d))
                                     for d in Direction.flat()
                                 )
                         elif pos is None:
-                            # changes made here
-                            # you can always play from hand a bug unless it`s 4th turn and queen is not on board (then you must play queen)
                             if self._can_bug_be_played(bug) and (
                                 self.current_player_turn != 4
                                 or self.current_player_queen_in_play
                                 or bug.type is BugType.QUEEN_BEE
                             ):
-                                self._valid_moves_cache.update(
-                                    Move(bug, None, placement) for placement in self._get_valid_placements()
+                                moves.update(
+                                    Move(bug, None, placement) for placement in self._get_valid_placements(color)
                                 )
-                        # if queen not on board, can't move other bugs
-                        # else, if bug is on top (and was not last moved???? TODO: check this), can move
                         elif self.current_player_queen_in_play and self._bugs_from_pos(pos)[-1] == bug and self._was_not_last_moved(bug):
                             if len(self._bugs_from_pos(pos)) > 1 or self._can_move_without_breaking_hive(pos):
                                 match bug.type:
                                     case BugType.QUEEN_BEE:
-                                        self._valid_moves_cache.update(self._get_sliding_moves(bug, pos, 1))
+                                        moves.update(self._get_sliding_moves(bug, pos, 1))
                                     case BugType.SPIDER:
-                                        self._valid_moves_cache.update(self._get_sliding_moves(bug, pos, 3))
+                                        moves.update(self._get_sliding_moves(bug, pos, 3))
                                     case BugType.BEETLE:
-                                        self._valid_moves_cache.update(self._get_beetle_moves(bug, pos))
+                                        moves.update(self._get_beetle_moves(bug, pos))
                                     case BugType.GRASSHOPPER:
-                                        self._valid_moves_cache.update(self._get_grasshopper_moves(bug, pos))
+                                        moves.update(self._get_grasshopper_moves(bug, pos))
                                     case BugType.SOLDIER_ANT:
-                                        self._valid_moves_cache.update(self._get_sliding_moves(bug, pos))
+                                        moves.update(self._get_sliding_moves(bug, pos))
                                     case BugType.MOSQUITO:
-                                        self._valid_moves_cache.update(self._get_mosquito_moves(bug, pos))
+                                        moves.update(self._get_mosquito_moves(bug, pos))
                                     case BugType.LADYBUG:
-                                        self._valid_moves_cache.update(self._get_ladybug_moves(bug, pos))
+                                        moves.update(self._get_ladybug_moves(bug, pos))
                                     case BugType.PILLBUG:
-                                        self._valid_moves_cache.update(self._get_sliding_moves(bug, pos, 1))
-                                        self._valid_moves_cache.update(self._get_pillbug_special_moves(pos))
+                                        moves.update(self._get_sliding_moves(bug, pos, 1))
+                                        moves.update(self._get_pillbug_special_moves(pos))
                             else:
                                 match bug.type:
                                     case BugType.MOSQUITO:
-                                        self._valid_moves_cache.update(self._get_mosquito_moves(bug, pos, True))
+                                        moves.update(self._get_mosquito_moves(bug, pos, True))
                                     case BugType.PILLBUG:
-                                        self._valid_moves_cache.update(self._get_pillbug_special_moves(pos))
-            return self._valid_moves_cache
-        return self._valid_moves_cache
+                                        moves.update(self._get_pillbug_special_moves(pos))
+            self._valid_moves_cache[color] = moves
+        return self._valid_moves_cache[color] or set()
 
-    def _get_valid_placements(self) -> Set[Position]:
+    def _get_valid_placements(self, color: PlayerColor = current_player_color) -> Set[Position]:
         return {
             neighbor
             for bug, pos in self._bug_to_pos.items()
-            if bug.color is self.current_player_color and pos and self._is_bug_on_top(bug)
+            if bug.color is color and pos and self._is_bug_on_top(bug)
             for direction in Direction.flat()
             for neighbor in [self._get_neighbor(pos, direction)]
             if not self._bugs_from_pos(neighbor)
             and all(
                 not self._bugs_from_pos(self._get_neighbor(neighbor, d))
-                or self._bugs_from_pos(self._get_neighbor(neighbor, d))[-1].color is self.current_player_color
+                or self._bugs_from_pos(self._get_neighbor(neighbor, d))[-1].color is color
                 for d in Direction.flat()
                 if d != direction.opposite
             )
@@ -378,24 +380,19 @@ class Board:
         return True
 
     def _can_bug_be_played(self, piece: Bug) -> bool:
+        # assert piece.pos is None
         return all(
             bug.id >= piece.id
             for bug, pos in self._bug_to_pos.items()
             if pos is None and bug.type is piece.type and bug.color is piece.color
         )
-        # _can_bug_be_played_from_hand() 
-        # return piece.pos is None and all(
-        #     bug.id < piece.id
-        #     for bug, pos in self._bug_to_pos.items()
-        #     if pos is not None and bug.type is piece.type and bug.color is piece.color
-        # )
 
     def _was_not_last_moved(self, bug: Bug) -> bool:
         return not self.moves[-1] or self.moves[-1].bug != bug
 
     def _parse_move(self, move_string: str) -> Optional[Move]:
         if move_string == Move.PASS:
-            if not self._get_valid_moves():
+            if not self.get_valid_moves():
                 return None
             raise InvalidMoveError("You can't pass when you have valid moves")
         if (match := re.fullmatch(Move.REGEX, move_string)):
@@ -404,7 +401,7 @@ class Board:
                 moved = Bug.parse(bug_string_1)
                 if (relative_pos := self._pos_from_bug(Bug.parse(bug_string_2)) if bug_string_2 else self.ORIGIN):
                     move = Move(moved, self._pos_from_bug(moved), self._get_neighbor(relative_pos, Direction(f"{left_dir}|") if left_dir else Direction(f"|{right_dir or ""}")))
-                    if move in self._get_valid_moves():
+                    if move in self.get_valid_moves():
                         return move
                     raise InvalidMoveError(f"'{move_string}' is not a valid move for the current board state")
                 raise InvalidMoveError(f"'{bug_string_2}' has not been played yet")
@@ -422,5 +419,4 @@ class Board:
         return self._bug_to_pos.get(bug)
 
     def _get_neighbor(self, position: Position, direction: Direction) -> Position:
-        # changes made here: before it was -> return position + self.NEIGHBOR_DELTAS[direction.delta_index]
         return position + self.NEIGHBOR_DELTAS[direction]

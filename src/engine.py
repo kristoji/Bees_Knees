@@ -1,8 +1,9 @@
+import re
 from typing import TypeGuard, Final, Optional
 from enums import Command, InvalidMoveError, Error
 from board import Board
 from game import Move
-from ai import Brain, Random
+from ai import Brain, Random, AlphaBetaPruner
 from copy import deepcopy
 
 class Engine:
@@ -10,7 +11,8 @@ class Engine:
 
     def __init__(self) -> None:
         self.board: Optional[Board] = None
-        self.brain: Brain = Random()
+        # self.brain: Brain = Random()
+        self.brain: Brain = AlphaBetaPruner()
 
     @property
     def is_active(self) -> TypeGuard[Board]:
@@ -85,7 +87,15 @@ class Engine:
 
     def bestmove(self, restriction: str, value: str) -> None:
         if self.is_active:
-            print(self.brain.calculate_best_move(deepcopy(self.board)))
+            if restriction == "depth" and value.isdigit():
+                print(self.brain.calculate_best_move(deepcopy(self.board), restriction, int(value)))
+            
+            elif restriction == "time" and re.fullmatch(r"\d+:\d+:\d+", value):
+            #    seconds: int = sum(int(x) * 60 ** i for i, x in enumerate(reversed(value.split(":"))))
+            #    print(self.brain.calculate_best_move(deepcopy(self.board), restriction, seconds))
+                raise Error("Time restriction is not yet implemented.")
+            else:
+                raise Error("Input string was not in a correct format.")
         else:
             raise Error("No game in progress. Try 'newgame' to start a new game.")
 
