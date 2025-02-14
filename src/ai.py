@@ -3,11 +3,34 @@ from random import choice
 from time import sleep
 from abc import ABC, abstractmethod
 from board import Board
-from enums import GameState, PlayerColor
+from enums import GameState, PlayerColor, Error
 from copy import deepcopy
 from game import Move
+from time import time
 
 INF = 10000
+
+class Node:
+    def __init__(self, move_str: str, board: Board, depth: int = 0, alpha: int = -INF, beta: int = INF) -> None:
+        self.move_str = move_str
+        self.board = board
+        self.alpha = alpha
+        self.beta = beta
+        self.depth = depth
+
+        self.best_move: str = ""
+        self.value: int = -INF if self.board.current_player_color == PlayerColor.WHITE else INF
+        self.moves: list[Move] = []
+        self.move_index: int = 0
+
+    def initialize_moves(self) -> None: 
+        self.moves = list(self.board.get_valid_moves())
+
+    def __str__(self) -> str:
+        return "-" * self.depth + f"> Node(move={self.move_str}, value={self.value}, alpha={self.alpha}, beta={self.beta}, move_i={self.move_index}/{len(self.moves)})"
+
+# class TranspositionTable:
+
 
 class Brain(ABC):
     def __init__(self) -> None:
@@ -29,26 +52,6 @@ class Random(Brain):
         sleep(0.5)
         return self._cache
 
-class Node:
-    def __init__(self, move_str: str, board: Board, depth: int = 0, alpha: int = -INF, beta: int = INF) -> None:
-        self.move_str = move_str
-        self.board = board
-        self.alpha = alpha
-        self.beta = beta
-        self.depth = depth
-
-        self.best_move: str = ""
-        self.value: int = -INF if self.board.current_player_color == PlayerColor.WHITE else INF
-        self.moves: list[Move] = []
-        self.move_index: int = 0
-
-    def initialize_moves(self) -> None: 
-        self.moves = list(self.board.get_valid_moves())
-
-    def __str__(self) -> str:
-        return "-" * self.depth + f"> Node(move={self.move_str}, value={self.value}, alpha={self.alpha}, beta={self.beta}, move_i={self.move_index}/{len(self.moves)})"
-
-
 class AlphaBetaPruner(Brain):
 
     def __init__(self) -> None:
@@ -56,16 +59,27 @@ class AlphaBetaPruner(Brain):
         self._eval_cost: Final[int] = 20
 
     def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
-        self._depth = value if restriction == "depth" else self._depth
         if not self._cache:
-            # print(f"[DBG] Calculating best move for {board.current_player_color} at depth {self._depth}")
-            root = Node(None, board)
-            self._ab_pruning(root, self._depth)
-            self._cache = root.best_move
+            if restriction == "depth":
+                self._depth = value
+                # print(f"[DBG] Calculating best move for {board.current_player_color} at depth {self._depth}")
+                root = Node(None, board)
+                self._ab_pruning(root, self._depth)
+                self._cache = root.best_move
+            
+            elif restriction == "time":
+                start = time()
+                depth = 1
+                while time() - start < value:
+                    root = Node(None, board)
+                    self._ab_pruning(root, depth)
+                    depth += 1
+                    self._cache = root.best_move
+            else:
+                raise Error("Invalid restriction")
         return self._cache
     
     def _ab_pruning(self, root: Node, max_depth: int) -> int:
-        # Initialize the root node's moves.
         root.initialize_moves()
         stack = [root]
 
@@ -104,8 +118,8 @@ class AlphaBetaPruner(Brain):
                 child_board.play(move_str)
                     
                 child = Node(move_str, child_board, current.depth + 1, current.alpha, current.beta)
-                # TODO: if child_depth == depth, dont initialize moves
-                child.initialize_moves()
+                if child.depth < max_depth:
+                    child.initialize_moves()
                 stack.append(child)
                 # print("[DBG] Child node created:", child)
             else:

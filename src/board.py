@@ -1,7 +1,8 @@
-from typing import Final, Optional, Set
-from enums import GameType, GameState, PlayerColor, BugType, Direction, Error, InvalidMoveError
-from game import Position, Bug, Move
 import re
+from hash import ZobristHash
+from game import Position, Bug, Move
+from typing import Final, Optional, Set
+from enums import GameType, GameState, PlayerColor, BugName, BugType, Direction, Error, InvalidMoveError
 
 
 class Board:
@@ -26,6 +27,7 @@ class Board:
         self.turn: int = turn
         self.move_strings: list[str] = []
         self.moves: list[Optional[Move]] = []
+        self._zobrist_hash: ZobristHash = ZobristHash()
         self._valid_moves_cache: dict[PlayerColor, Optional[Set[Move]]] = {PlayerColor.WHITE: None, PlayerColor.BLACK: None}
         self._pos_to_bug: dict[Position, list[Bug]] = {}
         self._bug_to_pos: dict[Bug, Optional[Position]] = {}
@@ -49,6 +51,7 @@ class Board:
         return (
             f"{self.type};{self.state};{self.current_player_color}[{self.current_player_turn}]"
             f"{';' if moves_part else ''}{moves_part}"
+            # f"\n[DBG] hash:{self._zobrist_hash}"
         )
 
     @property
@@ -71,20 +74,39 @@ class Board:
     def valid_moves(self) -> str:
         return ";".join(self.stringify_move(m) for m in self.get_valid_moves()) or Move.PASS
 
-    def play(self, move_string: str) -> None:
+    # @property
+    # def zobrist_key(self) -> int:
+    #     return self._zobrist_hash.value
+
+    def play(self, move_string: str, update_hash: bool = True) -> None:
         move = self._parse_move(move_string)
         if self.state is GameState.NOT_STARTED:
             self.state = GameState.IN_PROGRESS
+
         if self.state is GameState.IN_PROGRESS:
+            if update_hash:
+                if len(self.moves) and self.moves[-1]:
+                    self._zobrist_hash.toggle_last_moved_piece(BugName[str(self.moves[-1].bug)].value)
+                self._zobrist_hash.toggle_turn_color()
+
             self.turn += 1
             self.move_strings.append(move_string)
             self.moves.append(move)
             self._valid_moves_cache[self.other_player_color] = None
+            
             if move:
+
                 self._bug_to_pos[move.bug] = move.destination
-                if move.origin:
-                    self._pos_to_bug[move.origin].pop()
                 self._pos_to_bug.setdefault(move.destination, []).append(move.bug)
+                if move.origin:
+                    if update_hash:
+                        self._zobrist_hash.toggle_piece(BugName[str(move.bug)].value, move.origin, len(self._bugs_from_pos(move.origin)))
+                    self._pos_to_bug[move.origin].pop()
+                
+                if update_hash:
+                    self._zobrist_hash.toggle_last_moved_piece(BugName[str(move.bug)].value)
+                    self._zobrist_hash.toggle_piece(BugName[str(move.bug)].value, move.destination, len(self._bugs_from_pos(move.destination)))
+                
                 black_queen_surrounded = self.count_queen_neighbors(PlayerColor.BLACK) == 6
                 white_queen_surrounded = self.count_queen_neighbors(PlayerColor.WHITE) == 6
                 if black_queen_surrounded and white_queen_surrounded:
@@ -98,7 +120,7 @@ class Board:
                 f"You can't {'play' if move else Move.PASS} when the game is over"
             )
 
-    def undo(self, amount: int = 1) -> None:
+    def undo(self, amount: int = 1, update_hash: bool = True) -> None:
         if self.state is not GameState.NOT_STARTED and len(self.moves) >= amount:
             if self.state is not GameState.IN_PROGRESS:
                 self.state = GameState.IN_PROGRESS
@@ -109,11 +131,22 @@ class Board:
                 self.turn -= 1
                 self.move_strings.pop()
                 move = self.moves.pop()
+
+                if update_hash:
+                    if len(self.moves) and self.moves[-1]:
+                        self._zobrist_hash.toggle_last_moved_piece(BugName[str(self.moves[-1].bug)].value)
+                    self._zobrist_hash.toggle_turn_color()
                 if move:
+                    if update_hash:
+                        self._zobrist_hash.toggle_last_moved_piece(BugName[str(move.bug)].value)
+                        self._zobrist_hash.toggle_piece(BugName[str(move.bug)].value, move.destination, len(self._bugs_from_pos(move.destination)))
+                    
                     self._pos_to_bug[move.destination].pop()
                     self._bug_to_pos[move.bug] = move.origin
                     if move.origin:
                         self._pos_to_bug[move.origin].append(move.bug)
+                        if update_hash:
+                            self._zobrist_hash.toggle_piece(BugName[str(move.bug)].value, move.origin, len(self._bugs_from_pos(move.origin)))
             if self.turn == 0:
                 self.state = GameState.NOT_STARTED
         else:

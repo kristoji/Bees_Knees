@@ -1,4 +1,4 @@
-from enum import StrEnum, Flag, auto
+from enum import StrEnum, Flag, auto, Enum
 from functools import reduce
 
 
@@ -133,6 +133,37 @@ class BugType(StrEnum):
     LADYBUG = "L"
     PILLBUG = "P"
 
+class BugName(Enum):
+    wQ = 0
+    wS1 = auto()
+    wS2 = auto()
+    wB1 = auto()
+    wB2 = auto()
+    wG1 = auto()
+    wG2 = auto()
+    wG3 = auto()
+    wA1 = auto()
+    wA2 = auto()
+    wA3 = auto()
+    wM = auto()
+    wL = auto()
+    wP = auto()
+    bQ = auto()
+    bS1 = auto()
+    bS2 = auto()
+    bB1 = auto()
+    bB2 = auto()
+    bG1 = auto()
+    bG2 = auto()
+    bG3 = auto()
+    bA1 = auto()
+    bA2 = auto()
+    bA3 = auto()
+    bM = auto()
+    bL = auto()
+    bP = auto()
+    NumPieceNames = auto()
+
 
 class Direction(StrEnum):
     RIGHT = "|-"
@@ -204,3 +235,9 @@ class InvalidMoveError(Error):
 
     def __str__(self):
         return f"invalidmove {self.message}."
+    
+if __name__ == "__main__":
+    b = "wQ"
+    print(BugName[b].value)
+    print(BugName.wQ.name)
+    print(BugName.NumPieceNames.value)
