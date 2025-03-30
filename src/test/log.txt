@@ -1,0 +1,68 @@
+Path: [<board.Board object at 0x7f00e3ae1580>]
+Expansion done
+-----------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------
+Path: [<board.Board object at 0x70e37f8cb890>]
+Expansion done
+-----------------------------------------------------------------------------------------------
+Path: [<board.Board object at 0x7be8a7d67ef0>]
+Expansion done
+Simulation done
+Backprop done
+(0)
+ N = defaultdict(<class 'int'>, {<board.Board object at 0x7be8a7d67ef0>: 1})
+ Q = defaultdict(<class 'int'>, {<board.Board object at 0x7be8a7d67ef0>: 0.5})
+
+
+-----------------------------------------------------------------------------------------------
+Path: [<board.Board object at 0x7be8a7d67ef0>, <board.Board object at 0x7be896bdc860>]
+Expansion done
+Simulation done
+Backprop done
+(1)
+ N = defaultdict(<class 'int'>, {<board.Board object at 0x7be8a7d67ef0>: 2, <board.Board object at 0x7be896bdc860>: 1})
+ Q = defaultdict(<class 'int'>, {<board.Board object at 0x7be8a7d67ef0>: 1.0, <board.Board object at 0x7be896bdc860>: 0.5})
+
+
+-----------------------------------------------------------------------------------------------
+Path: [<board.Board object at 0x7be8a7d67ef0>, <board.Board object at 0x7be896bdccb0>]
+Expansion done
+Simulation done
+Backprop done
+(2)
+ N = defaultdict(<class 'int'>, {<board.Board object at 0x7be8a7d67ef0>: 3, <board.Board object at 0x7be896bdc860>: 1, <board.Board object at 0x7be896bdccb0>: 1})
+ Q = defaultdict(<class 'int'>, {<board.Board object at 0x7be8a7d67ef0>: 1.5, <board.Board object at 0x7be896bdc860>: 0.5, <board.Board object at 0x7be896bdccb0>: 0.5})
+
+
+-----------------------------------------------------------------------------------------------
+Path: [<board.Board object at 0x7be8a7d67ef0>, <board.Board object at 0x7be896bdd4f0>]
+Expansion done
+Simulation done
+Backprop done
+(3)
+ N = defaultdict(<class 'int'>, {<board.Board object at 0x7be8a7d67ef0>: 4, <board.Board object at 0x7be896bdc860>: 1, <board.Board object at 0x7be896bdccb0>: 1, <board.Board object at 0x7be896bdd4f0>: 1})
+ Q = defaultdict(<class 'int'>, {<board.Board object at 0x7be8a7d67ef0>: 2.0, <board.Board object at 0x7be896bdc860>: 0.5, <board.Board object at 0x7be896bdccb0>: 0.5, <board.Board object at 0x7be896bdd4f0>: 0.5})
+
+
+-----------------------------------------------------------------------------------------------
+Path: [<board.Board object at 0x7be8a7d67ef0>, <board.Board object at 0x7be896bdd5e0>]
+Expansion done
+Simulation done
+Backprop done
+(4)
+ N = defaultdict(<class 'int'>, {<board.Board object at 0x7be8a7d67ef0>: 5, <board.Board object at 0x7be896bdc860>: 1, <board.Board object at 0x7be896bdccb0>: 1, <board.Board object at 0x7be896bdd4f0>: 1, <board.Board object at 0x7be896bdd5e0>: 1})
+ Q = defaultdict(<class 'int'>, {<board.Board object at 0x7be8a7d67ef0>: 2.5, <board.Board object at 0x7be896bdc860>: 0.5, <board.Board object at 0x7be896bdccb0>: 0.5, <board.Board object at 0x7be896bdd4f0>: 0.5, <board.Board object at 0x7be896bdd5e0>: 0.5})
+
+
+-----------------------------------------------------------------------------------------------
+Path: [<board.Board object at 0x7be8a7d67ef0>, <board.Board object at 0x7be896bdc860>, <board.Board object at 0x7be896bdffb0>]
+Expansion done
+Simulation done
+Backprop done
+(5)
+ N = defaultdict(<class 'int'>, {<board.Board object at 0x7be8a7d67ef0>: 6, <board.Board object at 0x7be896bdc860>: 2, <board.Board object at 0x7be896bdccb0>: 1, <board.Board object at 0x7be896bdd4f0>: 1, <board.Board object at 0x7be896bdd5e0>: 1, <board.Board object at 0x7be896bdffb0>: 1})
+ Q = defaultdict(<class 'int'>, {<board.Board object at 0x7be8a7d67ef0>: 3.0, <board.Board object at 0x7be896bdc860>: 1.0, <board.Board object at 0x7be896bdccb0>: 0.5, <board.Board object at 0x7be896bdd4f0>: 0.5, <board.Board object at 0x7be896bdd5e0>: 0.5, <board.Board object at 0x7be896bdffb0>: 0.5})
+
+
+-----------------------------------------------------------------------------------------------
+Path: [<board.Board object at 0x7be8a7d67ef0>, <board.Board object at 0x7be896bdccb0>, <board.Board object at 0x7be7b71136b0>]

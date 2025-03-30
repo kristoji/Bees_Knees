@@ -3,7 +3,7 @@ from typing import TypeGuard, Final, Optional
 from enums import Command, InvalidMoveError, Error
 from board import Board
 from game import Move
-from ai import Brain, Random, AlphaBetaPruner
+from ai import Brain, Random, AlphaBetaPruner, MCTS
 from copy import deepcopy
 
 class Engine:
@@ -12,7 +12,8 @@ class Engine:
     def __init__(self) -> None:
         self.board: Optional[Board] = None
         # self.brain: Brain = Random()
-        self.brain: Brain = AlphaBetaPruner()
+        # self.brain: Brain = AlphaBetaPruner()
+        self.brain: Brain = MCTS()
 
     @property
     def is_active(self) -> TypeGuard[Board]:

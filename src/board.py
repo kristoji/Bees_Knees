@@ -1,11 +1,13 @@
+from random import choice
 import re
 from hash import ZobristHash
 from game import Position, Bug, Move
 from typing import Final, Optional, Set
 from enums import GameType, GameState, PlayerColor, BugName, BugType, Direction, Error, InvalidMoveError
+from mcts import Node_mcts
+from copy import deepcopy
 
-
-class Board:
+class Board(Node_mcts):
     ORIGIN: Final[Position] = Position(0, 0)
     NEIGHBOR_DELTAS: Final[
         dict[Direction, Position]
@@ -74,9 +76,9 @@ class Board:
     def valid_moves(self) -> str:
         return ";".join(self.stringify_move(m) for m in self.get_valid_moves()) or Move.PASS
 
-    # @property
-    # def zobrist_key(self) -> int:
-    #     return self._zobrist_hash.value
+    @property
+    def zobrist_key(self) -> int:
+        return self._zobrist_hash.value
 
     def play(self, move_string: str, update_hash: bool = True) -> None:
         move = self._parse_move(move_string)
@@ -453,3 +455,58 @@ class Board:
 
     def _get_neighbor(self, position: Position, direction: Direction) -> Position:
         return position + self.NEIGHBOR_DELTAS[direction]
+
+
+
+    '''
+    STARTING FUNCTIONS FOR MCTS
+
+    TODO: 
+    spostare i metodi: troppa memoria sprecata copiando le boards
+    si potrebbe copiare solo quella iniziale e da lì si gioca quando espandiamo
+    '''
+    def find_children(self):
+        "All possible successors of this board state"
+        if self.is_terminal():  # If the game is finished then no moves can be made
+            return set()
+        # Otherwise, you can make a move in each of the empty spots
+        children: Set[Board] = set()
+        for move in self.valid_moves.split(";"):
+            new_board = deepcopy(self)
+            new_board.play(move)
+            children.add(new_board)
+        return children
+
+    def find_random_child(self):
+        moves = self.valid_moves.split(";")
+        rnd_move_str = choice(list(moves))
+        new_board = deepcopy(self)
+        new_board.play(rnd_move_str)
+        return new_board
+
+    def is_terminal(self):
+        "Returns True if the node has no children"
+        if self.state == GameState.DRAW or self.state == GameState.BLACK_WINS or self.state == GameState.WHITE_WINS:
+            return True
+        else:
+            return False
+
+    def reward(self):
+        "Use the NeuralNetwork to get v (probability value)"
+        if not self.is_terminal():
+            # Use the Neural network to compute v
+            v = 0.5
+            return v
+        if self.state == GameState.DRAW:
+            return 0.5
+        elif self.state.BLACK_WINS and self.other_player_color==PlayerColor.BLACK or self.state.WHITE_WINS and self.other_player_color==PlayerColor.WHITE:
+            return 1
+        else:
+            return 0
+        
+
+    def __hash__(self):
+        return self.zobrist_key
+
+    def __eq__(node1, node2):
+        return node1.zobrist_key == node2.zobrist_key
