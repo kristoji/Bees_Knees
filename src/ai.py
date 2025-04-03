@@ -1,6 +1,6 @@
 from collections import defaultdict
 import math
-from typing import Final, Optional, Set, Tuple
+from typing import Final, List, Optional, Set, Tuple
 from random import choice
 from time import sleep
 from abc import ABC, abstractmethod
@@ -162,14 +162,13 @@ class MCTS(Brain):
     "Monte Carlo tree searcher. First rollout the tree then choose a move."
 
     def __init__(self, exploration_weight=1):
-        self.Q = defaultdict(int)  # total reward of each node
-        self.N = defaultdict(int)  # total visit count for each node
-        self.children = dict()  # children of each node
+        self.init_node = None
+        self.init_board = None  # the board to be used for the next rollout
         self.exploration_weight = exploration_weight
 
     def choose(self, node: Node_mcts) -> Node_mcts:
         "Choose the best successor of node. (Choose a move in the game)"
-        if node.is_terminal(): 
+        if node.is_terminal():
             raise RuntimeError(f"choose called on terminal node {node}")
 
         if node not in self.children:
@@ -182,13 +181,13 @@ class MCTS(Brain):
 
         return max(self.children[node], key=score)
 
-    def do_rollout(self, node: Node_mcts) -> None:
+    def do_rollout(self) -> None:
         "Make the tree one layer better. (Train for one iteration.)"
         with open("test/log.txt", "a") as f:
-            path = self._select(node)
-            f.write(f"Path: {path}\n")
+            leaf = self._select()
+            f.write(f"leaf: {leaf}\n")
             f.flush()
-            leaf = path[-1]
+
             self._expand(leaf)
             f.write("Expansion done\n")
             f.flush()
@@ -199,26 +198,46 @@ class MCTS(Brain):
             f.write("Backprop done\n")
             f.flush()
 
-    def _select(self, node: Node_mcts) -> list[Node_mcts]:
+    def _select(self) -> Node_mcts:
         "Find an unexplored descendent of `node`"
-        path = []
+        curr_node = self.init_node
+        curr_board = deepcopy(self.init_board)
+    
         while True:
-            path.append(node)
-            if node not in self.children or not self.children[node]:
-                # node is either unexplored or terminal
-                return path
-            unexplored = self.children[node] - self.children.keys()
+            
+            if curr_node.is_unexplored or curr_node.is_terminal:
+                break
+            
+            # if node not in self.children or not self.children[node]:
+            #     # node is either unexplored or terminal
+            #     return path
+            
+            unexplored: List[Node_mcts] = [node for node in curr_node.children if node.is_unexplored]
+            #unexplored = self.children[node] - self.children.keys()  # serve hash+stringaMossa per rttrovare le mosse unexplored
+            
             if unexplored:
-                n = unexplored.pop()
-                path.append(n)
-                return path
-            node = self._uct_select(node)  # descend a layer deeper
+                # alcuni figli sono esplorati, altri no: che facciamo???
+                curr_node = unexplored[0]
+                break
+            
+            curr_node = self._uct_select(curr_node)  # descend a layer deeper
+            
+            # Aggiorno la curr_board giocando la mossa scelta
+            curr_board.safe_play(curr_node.move)
+
+        # expand di curr_node
+        if curr_node.is_unexplored:
+            children: List[Node_mcts] = curr_node.find_children()
+            # aggiornare i figli:: safe_play + undo ??
+
+            # moves: List[Move] = curr_board.get_valid_moves()
+            # for move in moves:
 
     def _expand(self, node: Node_mcts) -> None:
         "Update the `children` dict with the children of `node`"
-        if node in self.children:
-            return  # already expanded
-        self.children[node] = node.find_children()
+        if node.is_unexplored:
+            moves: List[Move] = self.init
+            self.children[node] = node.find_children()
 
     def _simulate(self, node: Node_mcts) -> float:
         "Returns the reward for a random simulation (to completion) of `node`"
@@ -242,27 +261,34 @@ class MCTS(Brain):
         "Select a child of node, balancing exploration & exploitation"
 
         # All children of node should already be expanded:
-        assert all(n in self.children for n in self.children[node])
+        # [!] Evitabile
+        assert all(not child.is_unexplored for child in node.children)
 
-        log_N_vertex = math.log(self.N[node])
+        log_N_vertex = math.log(node.N)
 
-        def uct(n):
+        def uct(n: Node_mcts) -> float:
             "Formula di Norelli -> "
             "U(state, action) = c * P(s,a) * sqrt(Sum_on_b N(s, b)) / (1 + N(s,a))"
             
             "Upper confidence bound for trees"
-            return self.Q[n] / self.N[n] + self.exploration_weight * math.sqrt(
-                log_N_vertex / self.N[n]
+            return n.Q / n.N + self.exploration_weight * math.sqrt(
+                log_N_vertex / n.N
             )
 
-        return max(self.children[node], key=uct)
+        return max(node.children, key=uct)
     
     def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
+        self.init_board = board
+
+        last_move = board.moves[-1] if board.moves else None
+        self.init_node = Node_mcts(last_move)
+
+        
         with open("test/log.txt", "a") as f:
             for i in range(50):
                 f.write(f"-----------------------------------------------------------------------------------------------\n")
                 f.flush()
-                self.do_rollout(board)
+                self.do_rollout()
                 f.write(f"({i})\n N = {self.N}\n Q = {self.Q}\n\n\n")
                 f.flush()
 

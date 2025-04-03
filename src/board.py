@@ -4,10 +4,9 @@ from hash import ZobristHash
 from game import Position, Bug, Move
 from typing import Final, Optional, Set
 from enums import GameType, GameState, PlayerColor, BugName, BugType, Direction, Error, InvalidMoveError
-from mcts import Node_mcts
-from copy import deepcopy
 
-class Board(Node_mcts):
+
+class Board():
     ORIGIN: Final[Position] = Position(0, 0)
     NEIGHBOR_DELTAS: Final[
         dict[Direction, Position]
@@ -80,8 +79,7 @@ class Board(Node_mcts):
     def zobrist_key(self) -> int:
         return self._zobrist_hash.value
 
-    def play(self, move_string: str, update_hash: bool = True) -> None:
-        move = self._parse_move(move_string)
+    def safe_play(self, move: Move, update_hash: bool = True, move_string: str = None) -> None:
         if self.state is GameState.NOT_STARTED:
             self.state = GameState.IN_PROGRESS
 
@@ -92,6 +90,8 @@ class Board(Node_mcts):
                 self._zobrist_hash.toggle_turn_color()
 
             self.turn += 1
+            if move_string is None:
+                move_string = self.stringify_move(move)
             self.move_strings.append(move_string)
             self.moves.append(move)
             self._valid_moves_cache[self.other_player_color] = None
@@ -121,6 +121,10 @@ class Board(Node_mcts):
             raise InvalidMoveError(
                 f"You can't {'play' if move else Move.PASS} when the game is over"
             )
+
+    def play(self, move_string: str, update_hash: bool = True) -> None:
+        move = self._parse_move(move_string)
+        self.safe_play(move, update_hash, move_string) 
 
     def undo(self, amount: int = 1, update_hash: bool = True) -> None:
         if self.state is not GameState.NOT_STARTED and len(self.moves) >= amount:
@@ -458,51 +462,51 @@ class Board(Node_mcts):
 
 
 
-    '''
-    STARTING FUNCTIONS FOR MCTS
+    # '''
+    # STARTING FUNCTIONS FOR MCTS
 
-    TODO: 
-    spostare i metodi: troppa memoria sprecata copiando le boards
-    si potrebbe copiare solo quella iniziale e da lì si gioca quando espandiamo
-    '''
-    def find_children(self):
-        "All possible successors of this board state"
-        if self.is_terminal():  # If the game is finished then no moves can be made
-            return set()
-        # Otherwise, you can make a move in each of the empty spots
-        children: Set[Board] = set()
-        for move in self.valid_moves.split(";"):
-            new_board = deepcopy(self)
-            new_board.play(move)
-            children.add(new_board)
-        return children
+    # TODO: 
+    # spostare i metodi: troppa memoria sprecata copiando le boards
+    # si potrebbe copiare solo quella iniziale e da lì si gioca quando espandiamo
+    # '''
+    # def find_children(self):
+    #     "All possible successors of this board state"
+    #     if self.is_terminal():  # If the game is finished then no moves can be made
+    #         return set()
+    #     # Otherwise, you can make a move in each of the empty spots
+    #     children: Set[Board] = set()
+    #     for move in self.valid_moves.split(";"):
+    #         new_board = deepcopy(self)
+    #         new_board.play(move)
+    #         children.add(new_board)
+    #     return children
 
-    def find_random_child(self):
-        moves = self.valid_moves.split(";")
-        rnd_move_str = choice(list(moves))
-        new_board = deepcopy(self)
-        new_board.play(rnd_move_str)
-        return new_board
+    # def find_random_child(self):
+    #     moves = self.valid_moves.split(";")
+    #     rnd_move_str = choice(list(moves))
+    #     new_board = deepcopy(self)
+    #     new_board.play(rnd_move_str)
+    #     return new_board
 
-    def is_terminal(self):
-        "Returns True if the node has no children"
-        if self.state == GameState.DRAW or self.state == GameState.BLACK_WINS or self.state == GameState.WHITE_WINS:
-            return True
-        else:
-            return False
+    # def is_terminal(self):
+    #     "Returns True if the node has no children"
+    #     if self.state == GameState.DRAW or self.state == GameState.BLACK_WINS or self.state == GameState.WHITE_WINS:
+    #         return True
+    #     else:
+    #         return False
 
-    def reward(self):
-        "Use the NeuralNetwork to get v (probability value)"
-        if not self.is_terminal():
-            # Use the Neural network to compute v
-            v = 0.5
-            return v
-        if self.state == GameState.DRAW:
-            return 0.5
-        elif self.state.BLACK_WINS and self.other_player_color==PlayerColor.BLACK or self.state.WHITE_WINS and self.other_player_color==PlayerColor.WHITE:
-            return 1
-        else:
-            return 0
+    # def reward(self):
+    #     "Use the NeuralNetwork to get v (probability value)"
+    #     if not self.is_terminal():
+    #         # Use the Neural network to compute v
+    #         v = 0.5
+    #         return v
+    #     if self.state == GameState.DRAW:
+    #         return 0.5
+    #     elif self.state.BLACK_WINS and self.other_player_color==PlayerColor.BLACK or self.state.WHITE_WINS and self.other_player_color==PlayerColor.WHITE:
+    #         return 1
+    #     else:
+    #         return 0
         
 
     def __hash__(self):
