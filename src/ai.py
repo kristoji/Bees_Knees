@@ -12,7 +12,9 @@ from time import time
 
 from mcts import Node_mcts
 
-INF = 10000
+from tqdm import tqdm
+
+INF = float("inf")
 
 class Node:
     def __init__(self, move_str: str, board: Board, depth: int = 0, alpha: int = -INF, beta: int = INF) -> None:
@@ -157,6 +159,11 @@ class AlphaBetaPruner(Brain):
                 score += self._eval_cost * (- board.count_queen_neighbors(PlayerColor.WHITE) + board.count_queen_neighbors(PlayerColor.BLACK))
                 return score
 
+def print_log(msg: str) -> None:
+    return 
+    with open("test/log.txt", "a") as f:
+        f.write(msg + "\n")
+        f.flush()
 
 class MCTS(Brain):
     "Monte Carlo tree searcher. First rollout the tree then choose a move."
@@ -166,57 +173,51 @@ class MCTS(Brain):
         self.init_board = None  # the board to be used for the next rollout
         self.exploration_weight = exploration_weight
 
-    def choose(self, node: Node_mcts) -> Node_mcts:
+    def choose(self) -> Node_mcts:
         "Choose the best successor of node. (Choose a move in the game)"
-        if node.is_terminal():
-            raise RuntimeError(f"choose called on terminal node {node}")
 
-        if node not in self.children:
-            return node.find_random_child()
-
-        def score(n):
-            if self.N[n] == 0:
+        def score(n: Node_mcts) -> float:
+            if n.N == 0:
                 return float("-inf")  # avoid unseen moves
-            return self.Q[n] / self.N[n]  # average reward
+            return n.Q / n.N # average reward
+                
+        return max(self.init_node.children, key=score)
+        # if node.is_terminal():
+        #     raise RuntimeError(f"choose called on terminal node {node}")
 
-        return max(self.children[node], key=score)
+        # if node.is_unexplored:
+        #     return node.expand(self.init_board)
+
+        #return max(self.children[node], key=score)
 
     def do_rollout(self) -> None:
         "Make the tree one layer better. (Train for one iteration.)"
-        with open("test/log.txt", "a") as f:
-            leaf = self._select()
-            f.write(f"leaf: {leaf}\n")
-            f.flush()
+        leaf = self._select_and_expand()
+        print_log("Selection done")
 
-            self._expand(leaf)
-            f.write("Expansion done\n")
-            f.flush()
-            reward = self._simulate(leaf)
-            f.write("Simulation done\n")
-            f.flush()
-            self._backpropagate(path, reward)
-            f.write("Backprop done\n")
-            f.flush()
+        reward = self._simulate(leaf)
+        print_log("Simulation done")
+        
+        self._backpropagate(leaf, reward)
+        print_log("Backpropagation done")
+        
 
-    def _select(self) -> Node_mcts:
+    def _select_and_expand(self) -> Node_mcts:
         "Find an unexplored descendent of `node`"
         curr_node = self.init_node
         curr_board = deepcopy(self.init_board)
     
         while True:
+
+            print_log(f"Current node: {curr_node}")
             
             if curr_node.is_unexplored or curr_node.is_terminal:
                 break
             
-            # if node not in self.children or not self.children[node]:
-            #     # node is either unexplored or terminal
-            #     return path
-            
             unexplored: List[Node_mcts] = [node for node in curr_node.children if node.is_unexplored]
-            #unexplored = self.children[node] - self.children.keys()  # serve hash+stringaMossa per rttrovare le mosse unexplored
             
             if unexplored:
-                # alcuni figli sono esplorati, altri no: che facciamo???
+                # TODO: alcuni figli sono esplorati, altri no: che facciamo???
                 curr_node = unexplored[0]
                 break
             
@@ -225,38 +226,35 @@ class MCTS(Brain):
             # Aggiorno la curr_board giocando la mossa scelta
             curr_board.safe_play(curr_node.move)
 
+        print_log(f"Leaf node: {curr_node}")
+
         # expand di curr_node
         if curr_node.is_unexplored:
-            children: List[Node_mcts] = curr_node.find_children()
-            # aggiornare i figli:: safe_play + undo ??
+            print_log("Nodo unexplored -> expand")
+            curr_node.expand(curr_board)
 
-            # moves: List[Move] = curr_board.get_valid_moves()
-            # for move in moves:
-
-    def _expand(self, node: Node_mcts) -> None:
-        "Update the `children` dict with the children of `node`"
-        if node.is_unexplored:
-            moves: List[Move] = self.init
-            self.children[node] = node.find_children()
+        return curr_node
 
     def _simulate(self, node: Node_mcts) -> float:
         "Returns the reward for a random simulation (to completion) of `node`"
-        invert_reward = True
-        reward = node.reward()
-        return 1 - reward if invert_reward else reward
-        # while True:
-        #     if node.is_terminal():
-        #     node = node.find_random_child()
-        #     invert_reward = not invert_reward
+        # non possiamo scendere in fondo come nella repo: la simulazione si ferma
+        # chiamando la rete neurale facendo solo una espansione
+        
+        # Perchè è invertito il reward? 
+        # in board.py passiamo il turno prima di giocare la mossa
+        # quindi se il W fa la mossa e vince, il turno è del nero
 
-    def _backpropagate(self, path: list[Node_mcts], reward: float) -> None:
+        return 1 - node.reward()
+
+    def _backpropagate(self, leaf: Node_mcts, reward: float) -> None:
         "Send the reward back up to the ancestors of the leaf"
-        for node in reversed(path):
-            self.N[node] += 1
-            ""
-            self.Q[node] += reward
-            reward = 1 - reward  # 1 for me is 0 for my enemy, and vice versa
-
+        while leaf is not None:
+            leaf.N += 1
+            leaf.Q += reward
+            reward = 1 - reward
+            print_log(f"Backpropagation: {leaf} -> N = {leaf.N}, Q = {leaf.Q}")
+            leaf = leaf.parent
+            
     def _uct_select(self, node: Node_mcts) -> Node_mcts:
         "Select a child of node, balancing exploration & exploitation"
 
@@ -282,15 +280,20 @@ class MCTS(Brain):
 
         last_move = board.moves[-1] if board.moves else None
         self.init_node = Node_mcts(last_move)
+        self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key)
+        self.init_node.N = 1    # TODO: check
 
         
-        with open("test/log.txt", "a") as f:
-            for i in range(50):
-                f.write(f"-----------------------------------------------------------------------------------------------\n")
-                f.flush()
-                self.do_rollout()
-                f.write(f"({i})\n N = {self.N}\n Q = {self.Q}\n\n\n")
-                f.flush()
+        # for i in range(50):
+        # use tqdm to show progress
+        for i in tqdm(range(50), desc="Rollouts", unit="rollout"):
+            print_log("----------------------------------------------")
+            print_log(f"Rollout {i+1} / 50")
 
-        board = self.choose(board)
-        return board.stringify_move(board.moves[-1])
+            self.do_rollout()
+
+            print_log(f"N = {self.init_node.N}\n Q = {self.init_node.Q}")
+            print_log(f"Rollout {i+1} / 50 done")
+
+        node = self.choose()
+        return board.stringify_move(node.move)

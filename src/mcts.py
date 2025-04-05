@@ -20,7 +20,7 @@ class Node_mcts():
 
     @property
     def is_unexplored(self) -> bool:
-        return self.gamestate == GameState.IN_PROGRESS and not self.children
+        return (self.gamestate == GameState.IN_PROGRESS or self.gamestate == GameState.NOT_STARTED) and not self.children
 
     @property
     def is_terminal(self) -> bool:
@@ -34,6 +34,19 @@ class Node_mcts():
                 child = Node_mcts(move=move, parent=self)
                 self.children.append(child)
                 
+        return self.children
+
+    def expand(self, board: Board) -> List['Node_mcts']:
+        "Expand the node by adding all successors"
+        self.find_children(board)
+        for child in self.children:
+            # board._zobrist_hash.value = child.hash
+            # board.safe_play(child.move)
+            # child.set_state(board.state, board.current_player_color, board.zobrist_key)
+            # board.undo(update_hash=False)
+            board.safe_play(child.move)
+            child.set_state(board.state, board.current_player_color, board.zobrist_key)
+            board.undo()
         return self.children
     
     def find_random_child(self) -> 'Node_mcts':

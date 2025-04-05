@@ -26,3 +26,6 @@ ovviamente va fatta la rete neurale e quindi va aggiunto nella classe Node_mcts 
 
 TODO:
 da finire la expansion
+
+TODO:
+potremmo velocizzare l'undo
