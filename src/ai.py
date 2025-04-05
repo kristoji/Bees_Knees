@@ -160,7 +160,7 @@ class AlphaBetaPruner(Brain):
                 return score
 
 def print_log(msg: str) -> None:
-    return 
+    # return 
     with open("test/log.txt", "a") as f:
         f.write(msg + "\n")
         f.flush()
@@ -195,8 +195,10 @@ class MCTS(Brain):
         leaf = self._select_and_expand()
         print_log("Selection done")
 
+        
         reward = self._simulate(leaf)
         print_log("Simulation done")
+
         
         self._backpropagate(leaf, reward)
         print_log("Backpropagation done")
@@ -205,10 +207,14 @@ class MCTS(Brain):
     def _select_and_expand(self) -> Node_mcts:
         "Find an unexplored descendent of `node`"
         curr_node = self.init_node
-        curr_board = deepcopy(self.init_board)
+    
+        curr_board = self.init_board
+        
+        number_of_moves = 0
     
         while True:
 
+            
             print_log(f"Current node: {curr_node}")
             
             if curr_node.is_unexplored or curr_node.is_terminal:
@@ -225,13 +231,17 @@ class MCTS(Brain):
             
             # Aggiorno la curr_board giocando la mossa scelta
             curr_board.safe_play(curr_node.move)
-
+            number_of_moves += 1
+        
         print_log(f"Leaf node: {curr_node}")
 
         # expand di curr_node
         if curr_node.is_unexplored:
             print_log("Nodo unexplored -> expand")
-            curr_node.expand(curr_board)
+            curr_node.expand(curr_board)            
+
+        if number_of_moves:
+            curr_board.undo(number_of_moves)
 
         return curr_node
 
