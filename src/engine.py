@@ -105,6 +105,7 @@ class Engine:
             self.board.play(move)
             self.brain.empty_cache()
             print(self.board)
+            self.board.to_matrix()
         else:
             raise Error("No game in progress. Try 'newgame' to start a new game.")
 

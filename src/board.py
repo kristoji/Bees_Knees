@@ -462,51 +462,49 @@ class Board():
 
 
 
-    # '''
-    # STARTING FUNCTIONS FOR MCTS
+    def to_matrix(self) -> list[list[list[Bug]]]:
+        """Converts the board into a matrix using odd-r offset coordinates."""
+        if not self._pos_to_bug:
+            return []
 
-    # TODO: 
-    # spostare i metodi: troppa memoria sprecata copiando le boards
-    # si potrebbe copiare solo quella iniziale e da lì si gioca quando espandiamo
-    # '''
-    # def find_children(self):
-    #     "All possible successors of this board state"
-    #     if self.is_terminal():  # If the game is finished then no moves can be made
-    #         return set()
-    #     # Otherwise, you can make a move in each of the empty spots
-    #     children: Set[Board] = set()
-    #     for move in self.valid_moves.split(";"):
-    #         new_board = deepcopy(self)
-    #         new_board.play(move)
-    #         children.add(new_board)
-    #     return children
+        # TODO:
+        # rotations
+        # center in wQ if present 
+        # else (origini corrispondenti + ogni pezzo come centro + rotazioni)
 
-    # def find_random_child(self):
-    #     moves = self.valid_moves.split(";")
-    #     rnd_move_str = choice(list(moves))
-    #     new_board = deepcopy(self)
-    #     new_board.play(rnd_move_str)
-    #     return new_board
+        # Initialize matrix
+        SIZE = 10
+        LAYERS = 3
+        matrix: list[list[list[Bug]]] = [[[None for _ in range(SIZE)] for _ in range(SIZE)] for _ in range(LAYERS)]
 
-    # def is_terminal(self):
-    #     "Returns True if the node has no children"
-    #     if self.state == GameState.DRAW or self.state == GameState.BLACK_WINS or self.state == GameState.WHITE_WINS:
-    #         return True
-    #     else:
-    #         return False
+        # Extract positions
+        occupied_positions = self._pos_to_bug.keys()
 
-    # def reward(self):
-    #     "Use the NeuralNetwork to get v (probability value)"
-    #     if not self.is_terminal():
-    #         # Use the Neural network to compute v
-    #         v = 0.5
-    #         return v
-    #     if self.state == GameState.DRAW:
-    #         return 0.5
-    #     elif self.state.BLACK_WINS and self.other_player_color==PlayerColor.BLACK or self.state.WHITE_WINS and self.other_player_color==PlayerColor.WHITE:
-    #         return 1
-    #     else:
-    #         return 0
+        # Conversion helper: axial (q, r) → odd-r (col, row)
+        def to_oddr(pos: Position) -> tuple[int, int]:
+            col = pos.q + (pos.r - (pos.r & 1)) // 2
+            row = pos.r
+            return col, row
+
+        # Populate matrix
+        for pos, bugs in self._pos_to_bug.items():
+            col, row = to_oddr(pos)
+            adj_col = col + SIZE//2 - 1
+            adj_row = row + SIZE//2 - 1
+            for i, bug in enumerate(bugs):
+                matrix[i][adj_row][adj_col] = bug
+
+        with open("test/log.txt", "a") as f:
+            # f.write(f"matrix: {matrix}\n")
+            f.write(f"DIM:{len(matrix)}x{len(matrix[0])}x{len(matrix[0][0])}\n\n ")
+            for i,width in enumerate(matrix):
+                f.write(f"LAYER {i+1}\n")
+                for row in width:
+                    f.write("["+", ".join([str(bug) if bug else "" for bug in row]) + "]\n")
+            f.write("\nsesso e samba\n\n")
+
+        return matrix
+
         
 
     def __hash__(self):
