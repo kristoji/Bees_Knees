@@ -458,54 +458,7 @@ class Board():
         return self._bug_to_pos.get(bug)
 
     def _get_neighbor(self, position: Position, direction: Direction) -> Position:
-        return position + self.NEIGHBOR_DELTAS[direction]
-
-
-
-    def to_matrix(self) -> list[list[list[Bug]]]:
-        """Converts the board into a matrix using odd-r offset coordinates."""
-        if not self._pos_to_bug:
-            return []
-
-        # TODO:
-        # rotations
-        # center in wQ if present 
-        # else (origini corrispondenti + ogni pezzo come centro + rotazioni)
-
-        # Initialize matrix
-        SIZE = 10
-        LAYERS = 3
-        matrix: list[list[list[Bug]]] = [[[None for _ in range(SIZE)] for _ in range(SIZE)] for _ in range(LAYERS)]
-
-        # Extract positions
-        occupied_positions = self._pos_to_bug.keys()
-
-        # Conversion helper: axial (q, r) → odd-r (col, row)
-        def to_oddr(pos: Position) -> tuple[int, int]:
-            col = pos.q + (pos.r - (pos.r & 1)) // 2
-            row = pos.r
-            return col, row
-
-        # Populate matrix
-        for pos, bugs in self._pos_to_bug.items():
-            col, row = to_oddr(pos)
-            adj_col = col + SIZE//2 - 1
-            adj_row = row + SIZE//2 - 1
-            for i, bug in enumerate(bugs):
-                matrix[i][adj_row][adj_col] = bug
-
-        with open("test/log.txt", "a") as f:
-            # f.write(f"matrix: {matrix}\n")
-            f.write(f"DIM:{len(matrix)}x{len(matrix[0])}x{len(matrix[0][0])}\n\n ")
-            for i,width in enumerate(matrix):
-                f.write(f"LAYER {i+1}\n")
-                for row in width:
-                    f.write("["+", ".join([str(bug) if bug else "" for bug in row]) + "]\n")
-            f.write("\nsesso e samba\n\n")
-
-        return matrix
-
-        
+        return position + self.NEIGHBOR_DELTAS[direction]        
 
     def __hash__(self):
         return self.zobrist_key

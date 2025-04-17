@@ -3,6 +3,7 @@ from typing import TypeGuard, Final, Optional
 from enums import Command, InvalidMoveError, Error
 from board import Board
 from game import Move
+from training import Training
 from ai import Brain, Random, AlphaBetaPruner, MCTS
 from copy import deepcopy
 
@@ -105,7 +106,16 @@ class Engine:
             self.board.play(move)
             self.brain.empty_cache()
             print(self.board)
-            self.board.to_matrix()
+            
+            d = self.board._pos_to_bug
+            Training.to_matrix(d)
+
+            wQ_pos = Training.get_wQ_pos(self.board)
+            
+            d1 = Training.center_pos(wQ_pos, d)
+            Training.to_matrix(d1)
+            d1_r = Training.rotate_pos(d1)
+            Training.to_matrix(d1_r)
         else:
             raise Error("No game in progress. Try 'newgame' to start a new game.")
 

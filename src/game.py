@@ -8,6 +8,14 @@ class Position:
         self.q: Final[int] = q
         self.r: Final[int] = r
 
+    def rotate_cw(self) -> "Position":
+        return Position(-self.r, self.q + self.r)
+
+    def to_oddr(self) -> tuple[int, int]:
+        col = self.q + (self.r - (self.r & 1)) // 2
+        row = self.r
+        return col, row
+
     def __str__(self) -> str:
         return f"({self.q}, {self.r})"
 
