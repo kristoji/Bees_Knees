@@ -9,6 +9,7 @@ class Node_mcts():
     def __init__(self, move: Optional[Move] , parent: 'Node_mcts' = None):
         self.N = 0
         self.Q = 0
+        self.P = 0
         self.hash = None
         self.gamestate: GameState = None
         # next player to play

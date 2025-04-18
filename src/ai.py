@@ -168,10 +168,13 @@ def print_log(msg: str) -> None:
 class MCTS(Brain):
     "Monte Carlo tree searcher. First rollout the tree then choose a move."
 
-    def __init__(self, exploration_weight=1):
+    def __init__(self, exploration_weight: int = 1, num_rollouts: int = 50, debug: bool = False) -> None:
+        super().__init__()
         self.init_node = None
         self.init_board = None  # the board to be used for the next rollout
         self.exploration_weight = exploration_weight
+        self.num_rollouts = num_rollouts
+        self.debug = debug
 
     def choose(self) -> Node_mcts:
         "Choose the best successor of node. (Choose a move in the game)"
@@ -285,7 +288,7 @@ class MCTS(Brain):
 
         return max(node.children, key=uct)
     
-    def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
+    def run_simulation_from(self, board: Board) -> None:
         self.init_board = board
 
         last_move = board.moves[-1] if board.moves else None
@@ -293,17 +296,35 @@ class MCTS(Brain):
         self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key)
         self.init_node.N = 1    # TODO: check
 
-        
-        # for i in range(50):
-        # use tqdm to show progress
-        for i in tqdm(range(50), desc="Rollouts", unit="rollout"):
-            print_log("----------------------------------------------")
-            print_log(f"Rollout {i+1} / 50")
 
-            self.do_rollout()
+        if self.debug:
+            for i in tqdm(range(self.num_rollouts), desc="Rollouts", unit="rollout"):
+                print_log("----------------------------------------------")
+                print_log(f"Rollout {i+1} / 50")
 
-            print_log(f"N = {self.init_node.N}\n Q = {self.init_node.Q}")
-            print_log(f"Rollout {i+1} / 50 done")
+                self.do_rollout()
 
+                print_log(f"N = {self.init_node.N}\n Q = {self.init_node.Q}")
+                print_log(f"Rollout {i+1} / 50 done")
+        else:
+
+            for _ in range(self.num_rollouts):
+                self.do_rollout()
+
+    def action_selection(self, board: Board) -> str:
         node = self.choose()
         return board.stringify_move(node.move)
+        
+
+    def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
+        self.run_simulation_from(board)
+        return self.action_selection(board)
+
+    def get_moves_probs(self, board:Board) -> dict[Move, float]:
+        assert board == self.init_board
+        
+        moves_probabilities = {}
+        for child in self.init_node.children:
+            moves_probabilities[child.move] = child.P
+
+        return moves_probabilities
