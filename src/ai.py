@@ -321,10 +321,10 @@ class MCTS(Brain):
         return self.action_selection(board)
 
     def get_moves_probs(self, board:Board) -> dict[Move, float]:
-        assert board == self.init_board
+        # assert board == self.init_board
         
         moves_probabilities = {}
         for child in self.init_node.children:
-            moves_probabilities[child.move] = child.P
+            moves_probabilities[child.move] = child.N / self.num_rollouts
 
         return moves_probabilities

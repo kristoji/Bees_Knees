@@ -106,3 +106,11 @@ class Move:
                 and self.origin == other.origin
                 and self.destination == other.destination)
         )
+    
+    def rotate_cw(self) -> "Move":
+        return Move(self.bug, self.origin.rotate_cw() if self.origin else None, self.destination.rotate_cw())
+    
+    def center(self, pos: Position) -> "Move":
+        # we dont care about origin bc we'll use this only to check where the bug will be placed
+        return Move(self.bug, None, self.destination - pos)
+    
