@@ -39,7 +39,10 @@ class Node_mcts():
 
     def expand(self, board: Board) -> List['Node_mcts']:
         "Expand the node by adding all successors"
+        # TODO: chiamare la rete per calcolare i P dei figli (e settarli in set_state) e la V del nodo corrente
+        
         self.find_children(board)
+
         for child in self.children:
             # board._zobrist_hash.value = child.hash
             # board.safe_play(child.move)
@@ -80,8 +83,8 @@ class Node_mcts():
         elif self.gamestate == GameState.DRAW:
             return 0.5
         else:
-            # Tempo di chiamare la ------------- RETE NEURALE ------------------------
-            # Per il momento estraiamo un numero random tra 0 e 1
+            # ritorna la stima di vittoria della rete: V
+            # TODO: return self.V
             return uniform(0, 1)
             
     def __hash__(self) -> int:

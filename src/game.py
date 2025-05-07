@@ -15,6 +15,12 @@ class Position:
         col = self.q + (self.r - (self.r & 1)) // 2
         row = self.r
         return col, row
+    
+    @staticmethod
+    def from_oddr(col: int, row: int) -> "Position":
+        q = col - (row - (row & 1)) // 2
+        r = row
+        return Position(q, r)
 
     def __str__(self) -> str:
         return f"({self.q}, {self.r})"

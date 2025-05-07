@@ -241,7 +241,30 @@ class MCTS(Brain):
         # expand di curr_node
         if curr_node.is_unexplored:
             print_log("Nodo unexplored -> expand")
-            curr_node.expand(curr_board)            
+
+            # TODO
+
+            # -------------------------------- FROM CURRENT BOARD TO CENTERED BOARD ---------------------------------------
+            # origin = Training.get_wQ_pos()
+            # if not origin:
+            #   origin = (0,0)
+            # pos_to_bug_centered = Training.center_pos(curr_board.pos_to_bug, origin)
+            # matrice_in = Training.to_in_mat(pos_to_bug_centered , curr_board.current_player_color)
+
+            # -------------------------- USING NN TO GET MOVE PROBABILITIES AND V VALUE ----------------------------------
+            # output_rete = chiamo_la_rete()
+            # matrice_out, v = output_rete
+
+            # ------------------------- TRANSFORMING THE OUT MATRIX IN A DICT[MOVE, FLOAT] -------------------------------
+            # dict_mov_prob = Training.get_dict_from_matrix(matrice_out, origin, curr_board)
+            
+            # --------------------------- SETTING THE V VALUE IN THE CURRENT NODE ----------------------------------------
+            # curr_node.V = v
+
+            # ------------ EXANDING CURRENT NODE PASSING THE PROBABILITIES TO SET P VALUE IN THE CHILDREN ----------------
+            # curr_node.expand(curr_board, dict_move_prob)
+
+            curr_node.expand(curr_board)
 
         if number_of_moves:
             curr_board.undo(number_of_moves)
