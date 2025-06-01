@@ -1,9 +1,9 @@
 from random import choice
 import re
-from hash import ZobristHash
-from game import Position, Bug, Move
+from engine.hash import ZobristHash
+from engine.game import Position, Bug, Move
 from typing import Final, Optional, Set
-from enums import GameType, GameState, PlayerColor, BugName, BugType, Direction, Error, InvalidMoveError
+from engine.enums import GameType, GameState, PlayerColor, BugName, BugType, Direction, Error, InvalidMoveError
 
 
 class Board():

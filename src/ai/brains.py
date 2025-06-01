@@ -4,13 +4,14 @@ from typing import Final, List, Optional, Set, Tuple
 from random import choice
 from time import sleep
 from abc import ABC, abstractmethod
-from board import Board
-from enums import GameState, PlayerColor, Error
+from engine.board import Board
+from engine.enums import GameState, PlayerColor, Error
 from copy import deepcopy
-from game import Move
+from engine.game import Move
 from time import time
 
-from mcts import Node_mcts
+from ai.mcts import Node_mcts
+from ai.network import NeuralNetwork
 
 from tqdm import tqdm
 
@@ -168,13 +169,14 @@ def print_log(msg: str) -> None:
 class MCTS(Brain):
     "Monte Carlo tree searcher. First rollout the tree then choose a move."
 
-    def __init__(self, exploration_weight: int = 1, num_rollouts: int = 50, debug: bool = False) -> None:
+    def __init__(self, nn: NeuralNetwork, exploration_weight: int = 1, num_rollouts: int = 50, debug: bool = False) -> None:
         super().__init__()
         self.init_node = None
         self.init_board = None  # the board to be used for the next rollout
         self.exploration_weight = exploration_weight
         self.num_rollouts = num_rollouts
         self.debug = debug
+        self.nn = nn  # Neural network to use for move selection and evaluation
 
     def choose(self) -> Node_mcts:
         "Choose the best successor of node. (Choose a move in the game)"

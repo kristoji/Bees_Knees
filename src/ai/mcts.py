@@ -1,7 +1,7 @@
 from typing import List, Optional
-from board import Board
-from enums import GameState, PlayerColor
-from game import Move
+from engine.board import Board
+from engine.enums import GameState, PlayerColor
+from engine.game import Move
 from random import choice, uniform
 
 class Node_mcts():

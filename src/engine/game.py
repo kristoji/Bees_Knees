@@ -1,5 +1,5 @@
 from typing import Final, Optional
-from enums import Error, PlayerColor, BugType, Direction
+from engine.enums import Error, PlayerColor, BugType, Direction
 import re
 
 

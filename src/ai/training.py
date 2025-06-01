@@ -1,6 +1,6 @@
-from board import Board
-from enums import BugType, PlayerColor, BugName
-from game import Bug, Position, Move
+from engine.board import Board
+from engine.enums import BugType, PlayerColor, BugName
+from engine.game import Bug, Position, Move
 from typing import Any, Optional, TypeAlias
 
 # each bug has its own matrix of size SIZE x SIZE x LAYERS 
@@ -213,6 +213,7 @@ class Training:
 
 
 
+
 # class ZeroSumPerfInfoGame:
     
 #     """
@@ -232,3 +233,4 @@ class Training:
 
 #     def next_state(self, board: Board, action: Position) -> Board:
 #         return board.play(action)
+

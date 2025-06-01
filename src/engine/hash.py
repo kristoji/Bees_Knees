@@ -1,6 +1,6 @@
 from random import getrandbits
 from typing import Final
-from game import Position
+from engine.game import Position
 
 class ZobristHash:
 

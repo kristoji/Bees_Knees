@@ -1,10 +1,10 @@
 import re
 from typing import TypeGuard, Final, Optional
-from enums import Command, InvalidMoveError, Error
-from board import Board
-from game import Move
-from training import Training
-from ai import Brain, Random, AlphaBetaPruner, MCTS
+from engine.enums import Command, InvalidMoveError, Error
+from engine.board import Board
+from engine.game import Move
+# from ai.training import Training
+from ai.brains import Brain, Random, AlphaBetaPruner, MCTS
 from copy import deepcopy
 
 class Engine:
@@ -107,9 +107,9 @@ class Engine:
             self.brain.empty_cache()
             print(self.board)
             
-            pi = self.brain.get_moves_probs(self.board)
-            print(pi)
-            d = self.board._pos_to_bug
+            # pi = self.brain.get_moves_probs(self.board)
+            # print(pi)
+            # d = self.board._pos_to_bug
             # Training.to_matrix(d, self.board.current_player_color)
 
             # wQ_pos = Training.get_wQ_pos(self.board)
@@ -118,7 +118,7 @@ class Engine:
             # Training.to_matrix(d1, self.board.current_player_color)
             # d1_r = Training.rotate_pos(d1)
             # Training.to_matrix(d1_r, self.board.current_player_color)
-            Training.get_matrices(self.board, pi)
+            # Training.get_matrices(self.board, pi)
         else:
             raise Error("No game in progress. Try 'newgame' to start a new game.")
 
