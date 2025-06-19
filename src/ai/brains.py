@@ -235,7 +235,16 @@ class MCTS(Brain):
             curr_node = self._uct_select(curr_node)  # descend a layer deeper
             
             # Aggiorno la curr_board giocando la mossa scelta
-            curr_board.safe_play(curr_node.move)
+            try:
+                curr_board.safe_play(curr_node.move)
+            except IndexError:
+                print()
+                
+                print(curr_node.move.origin)
+                print(curr_board.stringify_move(curr_node.move))
+                print(curr_board.valid_moves)
+                print("SBRUGNA")
+                exit()
             number_of_moves += 1
         
         print_log(f"Leaf node: {curr_node}")
@@ -336,16 +345,19 @@ class MCTS(Brain):
             for _ in range(self.num_rollouts):
                 self.do_rollout()
 
-    def action_selection(self, board: Board) -> str:
+    def action_selection(self) -> str:
+        # , board: Board
+        # assert board == self.init_board
         node = self.choose()
-        return board.stringify_move(node.move)
+        return self.init_board.stringify_move(node.move)
         
 
     def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
         self.run_simulation_from(board)
         return self.action_selection(board)
 
-    def get_moves_probs(self, board:Board) -> dict[Move, float]:
+    def get_moves_probs(self) -> dict[Move, float]:
+        #, board:Board
         # assert board == self.init_board
         
         moves_probabilities = {}

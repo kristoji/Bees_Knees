@@ -36,7 +36,7 @@ number_of_rollouts = 50
 
 for iteration in range(number_of_iterations):
     for game in range(number_of_games):
-        engine.newgame("Base+MLP")
+        engine.newgame(["Base+MLP"])
         s = engine.board
         T_game = []
         mcts_game = MCTS(nn=f_theta, num_rollouts=number_of_rollouts)
@@ -44,17 +44,20 @@ for iteration in range(number_of_iterations):
 
         while not winner:
             # turn += 1
+            print(s.turn, end=": ")
             mcts_game.run_simulation_from(s)
             
-            pi: dict[Move, float] = mcts_game.get_moves_probs(s)
+            pi: dict[Move, float] = mcts_game.get_moves_probs()
             T_game += Training.get_matrices_from_board(s, pi)
             
-            a: str = mcts_game.action_selection(pi)
+            a: str = mcts_game.action_selection()
+            print(a)
             engine.play(a)
             #s = game_rules.next_state(s, a)
             winner: GameState = engine.board.state != GameState.IN_PROGRESS
 
 
+        print("FINALMENTE BRUNO SBRUGNAMI")
         for in_mat, out_mat in T_game:
             value: float = 1.0 if engine.board.state == GameState.WHITE_WIN else -1.0 if engine.board.state == GameState.BLACK_WIN else 0.0
             # T.append((in_mat, out_mat, value))

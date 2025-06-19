@@ -7,8 +7,8 @@ from typing import Any, Optional, TypeAlias
 Bug_Matrix: TypeAlias = list[list[list[list[float | None]]]]
 
 class Training:
-    SIZE: int = 10
-    LAYERS: int = 3
+    SIZE: int = 28
+    LAYERS: int = 5
     CENTER: int = SIZE // 2 - 1
     NUM_PIECES: int = BugName.NumPieceNames.value
 
@@ -22,7 +22,7 @@ class Training:
     def center_pos(bug_pos: Position, pos_to_bug: dict[Position, list[Bug]]) -> dict[Position, list[Bug]]:
         
         new_pos_to_bug: dict[Position, list[Bug]]= {}
-
+        
         for pos, bugs in pos_to_bug.items():
             new_pos_to_bug[pos - bug_pos] = bugs
 
@@ -89,9 +89,8 @@ class Training:
             col, row = move.destination.to_oddr()
             adj_col = col + Training.CENTER
             adj_row = row + Training.CENTER
-            layer = len(pos_to_bug[move.destination])
+            layer = len(pos_to_bug[move.destination]) -1 
             matrix[BugName[str(move.bug)].value][layer][adj_row][adj_col] = prob if move.bug.color == curr_player_color else -prob
-
         return matrix
     
     
@@ -105,14 +104,14 @@ class Training:
         in_pos_to_bug_centered: dict[Position, list[Bug]] = Training.center_pos(center, s._pos_to_bug)
 
         # we need Move to distinguish same bugs
-        pi_centered: dict[Move, float] = Training.center_pi(Training.get_wQ_pos(s), pi)
+        pi_centered: dict[Move, float] = Training.center_pi(center, pi)
 
         # as out we only want moved bugs probabilities
         out_pos_to_bug: dict[Position, list[Bug]] = {}
         for move, prob in pi.items():
             out_pos_to_bug[move.destination] = [None] * len(s._pos_to_bug[move.destination]) + [move.bug]
         
-        out_pos_to_bug_centered: dict[Position, list[Bug]] = Training.center_pos(Training.get_wQ_pos(s), out_pos_to_bug)
+        out_pos_to_bug_centered: dict[Position, list[Bug]] = Training.center_pos(center, out_pos_to_bug)
 
         # for each rotation, compute in_mat and out_mat
         for _ in range(6):
@@ -142,7 +141,10 @@ class Training:
             return Training.get_matrices_from_center(s, pi, wQ_pos)
         else:
             for pos in s._bug_to_pos.values():
-                tp_out += Training.get_matrices_from_center(s,pi,pos)
+                if pos is not None:
+                    tp_out += Training.get_matrices_from_center(s,pi,pos)
+            if not tp_out:
+                tp_out = Training.get_matrices_from_center(s,pi, Position(0,0))
             return tp_out
 
     @staticmethod

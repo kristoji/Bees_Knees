@@ -14,7 +14,8 @@ class Engine:
         self.board: Optional[Board] = None
         # self.brain: Brain = Random()
         # self.brain: Brain = AlphaBetaPruner()
-        self.brain: Brain = MCTS()
+        # self.brain: Brain = MCTS()
+        self.brain = None
 
     @property
     def is_active(self) -> TypeGuard[Board]:
@@ -104,7 +105,8 @@ class Engine:
     def play(self, move: str) -> None:
         if self.is_active:
             self.board.play(move)
-            self.brain.empty_cache()
+            if self.brain:
+                self.brain.empty_cache()
             print(self.board)
             
             # pi = self.brain.get_moves_probs(self.board)
