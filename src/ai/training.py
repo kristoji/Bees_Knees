@@ -150,8 +150,8 @@ class Training:
     @staticmethod
     def log_matrix(matrix: Bug_Matrix) -> None:
         # Log the matrix to a file
-        
-        with open("test/log.txt", "a") as f:
+        return
+        with open("src/test/log.txt", "a") as f:
             # f.write(f"matrix: {matrix}\n")
             f.write(f"DIM:{len(matrix)}x{len(matrix[0])}x{len(matrix[0][0])}\n\n ")
             for p, piece in enumerate(matrix):

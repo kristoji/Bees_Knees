@@ -11,7 +11,7 @@ from engine.game import Move
 from time import time
 
 from ai.mcts import Node_mcts
-from ai.network import NeuralNetwork
+# from ai.network import NeuralNetwork
 
 from tqdm import tqdm
 
@@ -161,7 +161,12 @@ class AlphaBetaPruner(Brain):
                 return score
 
 def print_log(msg: str) -> None:
-    # return 
+    return 
+    with open("test/log.txt", "a") as f:
+        f.write(msg + "\n")
+        f.flush()
+
+def print_log2(msg: str) -> None:
     with open("test/log.txt", "a") as f:
         f.write(msg + "\n")
         f.flush()
@@ -169,14 +174,13 @@ def print_log(msg: str) -> None:
 class MCTS(Brain):
     "Monte Carlo tree searcher. First rollout the tree then choose a move."
 
-    def __init__(self, nn: NeuralNetwork, exploration_weight: int = 1, num_rollouts: int = 50, debug: bool = False) -> None:
+    def __init__(self, exploration_weight: int = 1, num_rollouts: int = 50, debug: bool = False) -> None:
         super().__init__()
         self.init_node = None
         self.init_board = None  # the board to be used for the next rollout
         self.exploration_weight = exploration_weight
         self.num_rollouts = num_rollouts
         self.debug = debug
-        self.nn = nn  # Neural network to use for move selection and evaluation
 
     def choose(self) -> Node_mcts:
         "Choose the best successor of node. (Choose a move in the game)"
@@ -230,6 +234,8 @@ class MCTS(Brain):
             if unexplored:
                 # TODO: alcuni figli sono esplorati, altri no: che facciamo???
                 curr_node = unexplored[0]
+                curr_board.safe_play(curr_node.move)
+                number_of_moves += 1
                 break
             
             curr_node = self._uct_select(curr_node)  # descend a layer deeper
@@ -243,6 +249,7 @@ class MCTS(Brain):
                 print(curr_node.move.origin)
                 print(curr_board.stringify_move(curr_node.move))
                 print(curr_board.valid_moves)
+                print(curr_board)
                 print("SBRUGNA")
                 exit()
             number_of_moves += 1
@@ -311,22 +318,24 @@ class MCTS(Brain):
 
         log_N_vertex = math.log(node.N)
 
+        # TODO: ogni tanto capita N=0 e si rompe la formula
         def uct(n: Node_mcts) -> float:
             "Formula di Norelli -> "
             "U(state, action) = c * P(s,a) * sqrt(Sum_on_b N(s, b)) / (1 + N(s,a))"
             
             "Upper confidence bound for trees"
-            return n.Q / n.N + self.exploration_weight * math.sqrt(
-                log_N_vertex / n.N
+            N = n.N+1
+            return n.Q / N + self.exploration_weight * math.sqrt(
+                log_N_vertex / N
             )
 
         return max(node.children, key=uct)
     
     def run_simulation_from(self, board: Board) -> None:
         self.init_board = board
-
         last_move = board.moves[-1] if board.moves else None
         self.init_node = Node_mcts(last_move)
+
         self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key)
         self.init_node.N = 1    # TODO: check
 
@@ -365,3 +374,31 @@ class MCTS(Brain):
             moves_probabilities[child.move] = child.N / self.num_rollouts
 
         return moves_probabilities
+    
+def visualize_mcts(root, max_depth=3):
+    """
+    Print the MCTS tree from `root` as ASCII art via print_log().
+    """
+    def _recurse(node, prefix="", is_last=True, depth=0):
+        if depth > max_depth or node is None:
+            return
+
+        # Connector & label
+        connector = "└── " if is_last else "├── "
+        move_str = node.move if node.move is not None else "ROOT"
+        label = f"{move_str} [N={node.N}, Q={node.Q:.2f}]"
+        print_log2(f"{prefix}{connector}{label}")
+
+        # Prepare prefix for children
+        if depth < max_depth:
+            child_prefix = prefix + ("    " if is_last else "│   ")
+            children = getattr(node, "children", [])
+            for i, child in enumerate(children):
+                _recurse(child,
+                         prefix=child_prefix,
+                         is_last=(i == len(children) - 1),
+                         depth=depth + 1)
+
+    # Kick off printing
+    print_log2("MCTS Tree:")
+    _recurse(root, prefix="", is_last=True, depth=0)

@@ -10,6 +10,7 @@ class Node_mcts():
         self.N = 0
         self.Q = 0
         self.P = 0
+        self.H = 0  # heuristic value of the node
         self.hash = None
         self.gamestate: GameState = None
         # next player to play
@@ -37,8 +38,14 @@ class Node_mcts():
                 
         return self.children
 
+
     def expand(self, board: Board) -> List['Node_mcts']:
         "Expand the node by adding all successors"
+        def compute_heuristic(board: Board) -> float:
+            "Compute a heuristic value for the board state in [0, 1], where 1 is a win for white and 0 is a win for black"
+            # score: int = len(board.get_valid_moves(PlayerColor.WHITE)) - len(board.get_valid_moves(PlayerColor.BLACK))
+            score =  (6 - board.count_queen_neighbors(PlayerColor.WHITE) + board.count_queen_neighbors(PlayerColor.BLACK)) / 12.0
+            return score
         # TODO: chiamare la rete per calcolare i P dei figli (e settarli in set_state) e la V del nodo corrente
         
         self.find_children(board)
@@ -49,7 +56,10 @@ class Node_mcts():
             # child.set_state(board.state, board.current_player_color, board.zobrist_key)
             # board.undo(update_hash=False)
             board.safe_play(child.move)
-            child.set_state(board.state, board.current_player_color, board.zobrist_key)
+            h = compute_heuristic(board)
+            if board.current_player_color == PlayerColor.BLACK:
+                h = 1 - h
+            child.set_state(board.state, board.current_player_color, board.zobrist_key, h)
             board.undo()
         return self.children
     
@@ -57,12 +67,13 @@ class Node_mcts():
         "Random successor of this board state (for more efficient simulation)"
         return choice(self.find_children(Board()))
 
-    def set_state(self, state: GameState, player_color: PlayerColor, hash: int) -> None:
+    def set_state(self, state: GameState, player_color: PlayerColor, hash: int, H : float = 0.5) -> None:
         "Set the game state of this node"
 
         self.hash = hash
         self.gamestate = state
         self.player_color = player_color
+        self.H = H  # heuristic value of the node
 
     def get_state(self) -> GameState:
         "Returns True if the node has no children"
@@ -85,7 +96,8 @@ class Node_mcts():
         else:
             # ritorna la stima di vittoria della rete: V
             # TODO: return self.V
-            return uniform(0, 1)
+            # return uniform(0, 1)
+            return self.H
             
     def __hash__(self) -> int:
         "Nodes must be hashable"
