@@ -1,7 +1,7 @@
 from collections import defaultdict
 import math
 from typing import Final, List, Optional, Set, Tuple
-from random import choice
+from random import choice, uniform
 from time import sleep
 from abc import ABC, abstractmethod
 from engine.board import Board
@@ -9,7 +9,7 @@ from engine.enums import GameState, PlayerColor, Error
 from copy import deepcopy
 from engine.game import Move
 from time import time
-
+from ai.oracle import Oracle
 from ai.mcts import Node_mcts
 # from ai.network import NeuralNetwork
 
@@ -174,38 +174,38 @@ def print_log2(msg: str) -> None:
 class MCTS(Brain):
     "Monte Carlo tree searcher. First rollout the tree then choose a move."
 
-    def __init__(self, exploration_weight: int = 1, num_rollouts: int = 50, debug: bool = False) -> None:
+    def __init__(self, oracle: Oracle, exploration_weight: int = 1, num_rollouts: int = 1000, debug: bool = False) -> None:
         super().__init__()
         self.init_node = None
         self.init_board = None  # the board to be used for the next rollout
         self.exploration_weight = exploration_weight
         self.num_rollouts = num_rollouts
         self.debug = debug
+        self.oracle = oracle
 
-    def choose(self) -> Node_mcts:
+    def choose(self, training:bool) -> Node_mcts:
         "Choose the best successor of node. (Choose a move in the game)"
-
-        def score(n: Node_mcts) -> float:
-            if n.N == 0:
-                return float("-inf")  # avoid unseen moves
-            return n.Q / n.N # average reward
-                
-        return max(self.init_node.children, key=score)
-        # if node.is_terminal():
-        #     raise RuntimeError(f"choose called on terminal node {node}")
-
-        # if node.is_unexplored:
-        #     return node.expand(self.init_board)
-
-        #return max(self.children[node], key=score)
-
+        if training:
+            u = uniform(0, 1)
+            for child in self.init_node.children:
+                if u < child.Q:
+                    return child
+                u -= child.Q
+            raise Error("No child selected in MCTS.choose()")
+        else:
+            def score(n: Node_mcts) -> float:
+                "Score function for the node. Higher is better."
+                return n.N 
+            return max(self.init_node.children, key=score)
+        
+        
     def do_rollout(self) -> None:
         "Make the tree one layer better. (Train for one iteration.)"
         leaf = self._select_and_expand()
         print_log("Selection done")
 
         
-        reward = self._simulate(leaf)
+        reward = 1 - leaf.reward()      # perché ci interessa vedere i valori di Q e W dal padre (che ha colore opposto)
         print_log("Simulation done")
 
         
@@ -223,35 +223,15 @@ class MCTS(Brain):
     
         while True:
 
-            
             print_log(f"Current node: {curr_node}")
-            
+
             if curr_node.is_unexplored or curr_node.is_terminal:
-                break
-            
-            unexplored: List[Node_mcts] = [node for node in curr_node.children if node.is_unexplored]
-            
-            if unexplored:
-                # TODO: alcuni figli sono esplorati, altri no: che facciamo???
-                curr_node = unexplored[0]
-                curr_board.safe_play(curr_node.move)
-                number_of_moves += 1
                 break
             
             curr_node = self._uct_select(curr_node)  # descend a layer deeper
             
             # Aggiorno la curr_board giocando la mossa scelta
-            try:
-                curr_board.safe_play(curr_node.move)
-            except IndexError:
-                print()
-                
-                print(curr_node.move.origin)
-                print(curr_board.stringify_move(curr_node.move))
-                print(curr_board.valid_moves)
-                print(curr_board)
-                print("SBRUGNA")
-                exit()
+            curr_board.safe_play(curr_node.move)
             number_of_moves += 1
         
         print_log(f"Leaf node: {curr_node}")
@@ -259,30 +239,8 @@ class MCTS(Brain):
         # expand di curr_node
         if curr_node.is_unexplored:
             print_log("Nodo unexplored -> expand")
-
-            # TODO
-
-            # -------------------------------- FROM CURRENT BOARD TO CENTERED BOARD ---------------------------------------
-            # origin = Training.get_wQ_pos()
-            # if not origin:
-            #   origin = (0,0)
-            # pos_to_bug_centered = Training.center_pos(curr_board.pos_to_bug, origin)
-            # matrice_in = Training.to_in_mat(pos_to_bug_centered , curr_board.current_player_color)
-
-            # -------------------------- USING NN TO GET MOVE PROBABILITIES AND V VALUE ----------------------------------
-            # output_rete = chiamo_la_rete()
-            # matrice_out, v = output_rete
-
-            # ------------------------- TRANSFORMING THE OUT MATRIX IN A DICT[MOVE, FLOAT] -------------------------------
-            # dict_mov_prob = Training.get_dict_from_matrix(matrice_out, origin, curr_board)
-            
-            # --------------------------- SETTING THE V VALUE IN THE CURRENT NODE ----------------------------------------
-            # curr_node.V = v
-
-            # ------------ EXANDING CURRENT NODE PASSING THE PROBABILITIES TO SET P VALUE IN THE CHILDREN ----------------
-            # curr_node.expand(curr_board, dict_move_prob)
-
-            curr_node.expand(curr_board)
+            v, pi = self.oracle.predict(curr_board)
+            curr_node.expand(curr_board, v, pi)
 
         if number_of_moves:
             curr_board.undo(number_of_moves)
@@ -292,19 +250,15 @@ class MCTS(Brain):
     def _simulate(self, node: Node_mcts) -> float:
         "Returns the reward for a random simulation (to completion) of `node`"
         # non possiamo scendere in fondo come nella repo: la simulazione si ferma
-        # chiamando la rete neurale facendo solo una espansione
-        
-        # Perchè è invertito il reward? 
-        # in board.py passiamo il turno prima di giocare la mossa
-        # quindi se il W fa la mossa e vince, il turno è del nero
-
-        return 1 - node.reward()
+        # return 1 - node.reward()
+        return node.reward()
 
     def _backpropagate(self, leaf: Node_mcts, reward: float) -> None:
         "Send the reward back up to the ancestors of the leaf"
         while leaf is not None:
             leaf.N += 1
-            leaf.Q += reward
+            leaf.W += reward
+            leaf.Q = leaf.W / leaf.N
             reward = 1 - reward
             print_log(f"Backpropagation: {leaf} -> N = {leaf.N}, Q = {leaf.Q}")
             leaf = leaf.parent
@@ -312,32 +266,20 @@ class MCTS(Brain):
     def _uct_select(self, node: Node_mcts) -> Node_mcts:
         "Select a child of node, balancing exploration & exploitation"
 
-        # All children of node should already be expanded:
-        # [!] Evitabile
-        assert all(not child.is_unexplored for child in node.children)
+        sqrt_N_vertex = math.sqrt(node.N)
+        def uct_Norels(n:Node_mcts) -> float:
+            # return 10*n.Q + n.P * sqrt_N_vertex / (1 + n.N)
+            return n.Q + 100*n.P * sqrt_N_vertex / (1 + n.N)
 
-        log_N_vertex = math.log(node.N)
+        return max(node.children, key=uct_Norels)
 
-        # TODO: ogni tanto capita N=0 e si rompe la formula
-        def uct(n: Node_mcts) -> float:
-            "Formula di Norelli -> "
-            "U(state, action) = c * P(s,a) * sqrt(Sum_on_b N(s, b)) / (1 + N(s,a))"
-            
-            "Upper confidence bound for trees"
-            N = n.N+1
-            return n.Q / N + self.exploration_weight * math.sqrt(
-                log_N_vertex / N
-            )
-
-        return max(node.children, key=uct)
-    
     def run_simulation_from(self, board: Board) -> None:
         self.init_board = board
         last_move = board.moves[-1] if board.moves else None
         self.init_node = Node_mcts(last_move)
 
-        self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key)
-        self.init_node.N = 1    # TODO: check
+        self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key, 0)
+        # self.init_node.N = 1    # TODO: check
 
 
         if self.debug:
@@ -354,10 +296,10 @@ class MCTS(Brain):
             for _ in range(self.num_rollouts):
                 self.do_rollout()
 
-    def action_selection(self) -> str:
+    def action_selection(self, training=False) -> str:
         # , board: Board
         # assert board == self.init_board
-        node = self.choose()
+        node = self.choose(training)
         return self.init_board.stringify_move(node.move)
         
 
@@ -386,7 +328,7 @@ def visualize_mcts(root, max_depth=3):
         # Connector & label
         connector = "└── " if is_last else "├── "
         move_str = node.move if node.move is not None else "ROOT"
-        label = f"{move_str} [N={node.N}, Q={node.Q:.2f}]"
+        label = f"{move_str} [N={node.N}, W={node.W:.2f}]"
         print_log2(f"{prefix}{connector}{label}")
 
         # Prepare prefix for children

@@ -1,3 +1,4 @@
+from collections import defaultdict
 from random import choice
 import re
 from engine.hash import ZobristHash
@@ -45,6 +46,7 @@ class Board():
                     self._bug_to_pos[Bug(color, BugType.SOLDIER_ANT, 3)] = None
                 else:
                     self._bug_to_pos[Bug(color, BugType(expansion.name))] = None
+        self._draw_counter: dict[int, int] = defaultdict(lambda: 0)
         self._play_initial_moves(moves)
 
     def __str__(self) -> str:
@@ -117,6 +119,10 @@ class Board():
                     self.state = GameState.WHITE_WINS
                 elif white_queen_surrounded:
                     self.state = GameState.BLACK_WINS
+
+                self._draw_counter[self.zobrist_key] += 1
+                if self._draw_counter[self.zobrist_key] > 2:
+                    self.state = GameState.DRAW
         else:
             raise InvalidMoveError(
                 f"You can't {'play' if move else Move.PASS} when the game is over"
@@ -137,6 +143,7 @@ class Board():
                 self.turn -= 1
                 self.move_strings.pop()
                 move = self.moves.pop()
+                self._draw_counter[self.zobrist_key] -= 1
 
                 if update_hash:
                     if len(self.moves) and self.moves[-1]:

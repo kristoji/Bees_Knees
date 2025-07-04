@@ -1,60 +1,47 @@
 # from ai.network import NeuralNetwork
-from ai.brains import MCTS, visualize_mcts
+from ai.brains import MCTS
 from ai.training import Training
 from engine.enums import GameState
 from engineer import Engine
 from engine.game import Move
+from ai.oracle import Oracle
 import numpy as np
-"""
-ZerosumPerfinfGame
-.initial_state()->s
-.next_state(s, a)->s’
-.game_phase(s)-> winner
-"""
+
 engine = Engine()
 
-"""
-DeepNeuralNetwork
-.__init__(game_rules)       # Base+MLP
-.copy()
-.training(T)
-"""
-# f_theta = NeuralNetwork()
+def reset_log(string: str = ""):
+    with open("test/log.txt", "w") as f:
+        f.write(string)
 
-#Training Data: # Tuple of 3 np arrays: (in_mats, out_mats, values)
+reset_log()
+
+f_theta = Oracle()
+# Training Data: # Tuple of 3 np arrays: (in_mats, out_mats, values)
 T = (np.array([]), np.array([]), np.array([]))  
 
-#Number of training iteration
 number_of_iterations = 1
-
-#Number of games per iteration
 number_of_games = 5
-
-#Number of rollouts per MCTS simulation
-number_of_rollouts = 50
-        
+number_of_rollouts = 1000      
 
 for iteration in range(number_of_iterations):
     for game in range(number_of_games):
         engine.newgame(["Base+MLP"])
         s = engine.board
         T_game = []
-        mcts_game = MCTS(num_rollouts=number_of_rollouts)
+        mcts_game = MCTS(oracle=f_theta, num_rollouts=number_of_rollouts)
         winner = None
 
         while not winner:
-            # turn += 1
+
             print(s.turn, end=": ")
             mcts_game.run_simulation_from(s)
-            # visualize_mcts(mcts_game.init_node, max_depth=1)
 
             pi: dict[Move, float] = mcts_game.get_moves_probs()
             T_game += Training.get_matrices_from_board(s, pi)
             
-            a: str = mcts_game.action_selection()
+            a: str = mcts_game.action_selection(training=False)
             print(a)
             engine.play(a)
-            #s = game_rules.next_state(s, a)
             winner: GameState = engine.board.state != GameState.IN_PROGRESS
 
 
