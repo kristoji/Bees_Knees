@@ -82,6 +82,8 @@ class Node_mcts():
             else:
                 return 0    # black win
         elif self.gamestate == GameState.DRAW:
+            return 1 - self.V
+            # # return 0
             return 0.5
         else:
             # ritorna la stima di vittoria della rete: V

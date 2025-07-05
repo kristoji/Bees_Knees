@@ -34,12 +34,12 @@ for iteration in range(number_of_iterations):
         while not winner:
 
             print(s.turn, end=": ")
-            mcts_game.run_simulation_from(s)
+            mcts_game.run_simulation_from(s, debug=False)
 
             pi: dict[Move, float] = mcts_game.get_moves_probs()
-            T_game += Training.get_matrices_from_board(s, pi)
+            # T_game += Training.get_matrices_from_board(s, pi)
             
-            a: str = mcts_game.action_selection(training=False)
+            a: str = mcts_game.action_selection(training=True)
             print(a)
             engine.play(a)
             winner: GameState = engine.board.state != GameState.IN_PROGRESS

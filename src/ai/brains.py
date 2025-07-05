@@ -161,6 +161,7 @@ class AlphaBetaPruner(Brain):
                 return score
 
 def print_log(msg: str) -> None:
+    # print(msg)
     return 
     with open("test/log.txt", "a") as f:
         f.write(msg + "\n")
@@ -174,23 +175,23 @@ def print_log2(msg: str) -> None:
 class MCTS(Brain):
     "Monte Carlo tree searcher. First rollout the tree then choose a move."
 
-    def __init__(self, oracle: Oracle, exploration_weight: int = 1, num_rollouts: int = 1000, debug: bool = False) -> None:
+    def __init__(self, oracle: Oracle, exploration_weight: int = 1, num_rollouts: int = 1000) -> None:
         super().__init__()
         self.init_node = None
         self.init_board = None  # the board to be used for the next rollout
         self.exploration_weight = exploration_weight
         self.num_rollouts = num_rollouts
-        self.debug = debug
         self.oracle = oracle
 
     def choose(self, training:bool) -> Node_mcts:
         "Choose the best successor of node. (Choose a move in the game)"
         if training:
-            u = uniform(0, 1)
+            # assert self.init_node.N == self.num_rollouts, "The number of rollouts must be equal to the number of visits to the root node."
+            rnd = uniform(0, 1)
             for child in self.init_node.children:
-                if u < child.Q:
+                if rnd <= (portion := child.N / self.num_rollouts):
                     return child
-                u -= child.Q
+                rnd -= portion
             raise Error("No child selected in MCTS.choose()")
         else:
             def score(n: Node_mcts) -> float:
@@ -241,6 +242,9 @@ class MCTS(Brain):
             print_log("Nodo unexplored -> expand")
             v, pi = self.oracle.predict(curr_board)
             curr_node.expand(curr_board, v, pi)
+        elif curr_node.is_terminal:
+            v = self.oracle.compute_heuristic(curr_board)
+            curr_node.V = v
 
         if number_of_moves:
             curr_board.undo(number_of_moves)
@@ -269,28 +273,27 @@ class MCTS(Brain):
         sqrt_N_vertex = math.sqrt(node.N)
         def uct_Norels(n:Node_mcts) -> float:
             # return 10*n.Q + n.P * sqrt_N_vertex / (1 + n.N)
-            return n.Q + 100*n.P * sqrt_N_vertex / (1 + n.N)
+            return n.Q + n.P * sqrt_N_vertex / (1 + n.N)
 
         return max(node.children, key=uct_Norels)
 
-    def run_simulation_from(self, board: Board) -> None:
+    def run_simulation_from(self, board: Board, debug: bool=False) -> None:
         self.init_board = board
         last_move = board.moves[-1] if board.moves else None
         self.init_node = Node_mcts(last_move)
 
         self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key, 0)
-        # self.init_node.N = 1    # TODO: check
 
 
-        if self.debug:
+        if debug:
             for i in tqdm(range(self.num_rollouts), desc="Rollouts", unit="rollout"):
-                print_log("----------------------------------------------")
-                print_log(f"Rollout {i+1} / 50")
+                # print_log("----------------------------------------------")
+                # print_log(f"Rollout {i+1} / 50")
 
                 self.do_rollout()
 
-                print_log(f"N = {self.init_node.N}\n Q = {self.init_node.Q}")
-                print_log(f"Rollout {i+1} / 50 done")
+                # print_log(f"N = {self.init_node.N}\n Q = {self.init_node.Q}")
+                # print_log(f"Rollout {i+1} / 50 done")
         else:
 
             for _ in range(self.num_rollouts):
