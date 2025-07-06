@@ -7,6 +7,7 @@ from engine.game import Move
 from ai.oracle import Oracle, OracleNN
 import numpy as np
 import os
+from datetime import datetime
 
     
 
@@ -19,14 +20,17 @@ os.chdir(BASE_PATH)  # Change working directory to the base path
 os.makedirs("data", exist_ok=True)
 os.makedirs("models", exist_ok=True)
 
+# GLOBALS
 ENGINE = Engine()
 
+# PARAMS
 N_ITERATIONS = 1
-N_GAMES = 1
-N_DUELS = 1
-N_ROLLOUTS = 100
-ALLOW_DRAWS = 1
-SHAPE = (Training.NUM_PIECES * Training.LAYERS, Training.SIZE, Training.SIZE)
+N_GAMES = 5
+N_DUELS = 10
+N_ROLLOUTS = 1000
+ALLOW_DRAWS = 3
+VERBOSE = True
+# DEBUG = False
 
 
 def duel(new_player: Oracle, old_player: Oracle, games: int = 10) -> tuple[float, float]:
@@ -37,10 +41,14 @@ def duel(new_player: Oracle, old_player: Oracle, games: int = 10) -> tuple[float
     old_wins = 0
     new_wins = 0
 
-    for game in games:
+    for game in range(games):
+
+        log_subheader(f"Duel Game {game + 1} of {games}: OLD {old_wins} - {new_wins} NEW")
 
         ENGINE.newgame(["Base+MLP"])
         s = ENGINE.board
+        winner = None
+
         mcts_game_old = MCTS(oracle=old_player, num_rollouts=N_ROLLOUTS)
         mcts_game_new = MCTS(oracle=new_player, num_rollouts=N_ROLLOUTS)
 
@@ -50,21 +58,21 @@ def duel(new_player: Oracle, old_player: Oracle, games: int = 10) -> tuple[float
 
         while not winner:
 
-            print(s.turn, end=": ")
+            # print(s.turn, end=": ")
             white_player.run_simulation_from(s, debug=False)
             a: str = white_player.action_selection(training=False)
-            print(a)
-            ENGINE.play(a)
+            # print(a)
+            ENGINE.play(a, verbose=VERBOSE)
 
             winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
             if winner:
                 break
 
-            print(s.turn, end=": ")
+            # print(s.turn, end=": ")
             black_player.run_simulation_from(s, debug=False)
             a: str = black_player.action_selection(training=False)
-            print(a)
-            ENGINE.play(a)
+            # print(a)
+            ENGINE.play(a, verbose=VERBOSE)
 
     
             winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
@@ -87,6 +95,18 @@ def reset_log(string: str = ""):
     with open("test/log.txt", "w") as f:
         f.write(string)
 
+def log_header(title: str, width: int = 60, char: str = '='):
+    bar = char * width
+    ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\n{bar}")
+    print(f"{ts} | {title.center(width - len(ts) - 3)}")
+    print(f"{bar}\n")
+
+def log_subheader(title: str, width: int = 50, char: str = '-'):
+    bar = char * width
+    print(f"{bar}")
+    print(f"{title.center(width)}")
+    print(f"{bar}")
 
 
 def main(): 
@@ -99,17 +119,13 @@ def main():
     for iteration in range(N_ITERATIONS):
         os.makedirs("data/iteration_" + str(iteration), exist_ok=True)
 
-        print()
-        print(f"----------- STARTING ITERATION {iteration} -----------")
-        print()
+        log_header(f"STARTING ITERATION {iteration}")
 
         game = 0
         draw = 0
         while game < N_GAMES:
 
-            print()
-            print(f"\t------- STARTING GAME {game} -------")
-            print()
+            log_subheader(f"Game {game} (Draws so far: {draw})")
 
             T_game = []
 
@@ -120,17 +136,17 @@ def main():
 
             while not winner:
 
-                print(s.turn, end=": ")
+                # print(s.turn, end=": ")
                 mcts_game.run_simulation_from(s, debug=False)
 
                 pi: dict[Move, float] = mcts_game.get_moves_probs()
                 T_game += Training.get_matrices_from_board(s, pi)
                 
                 a: str = mcts_game.action_selection(training=True)
-                print(a)
-                ENGINE.play(a)
+                # print(a)
+                ENGINE.play(a, verbose=VERBOSE)
                 winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
-                winner = True #[DBG]
+                # winner = True #[DBG]
 
             if ENGINE.board.state == GameState.DRAW:
                 draw += 1
@@ -141,17 +157,17 @@ def main():
             print(f"Game {game} finished with state {ENGINE.board.state.name}")
 
             value: float = 1.0 if ENGINE.board.state == GameState.WHITE_WINS else -1.0 if ENGINE.board.state == GameState.BLACK_WINS else 0.0
-            value = 1.0 #[DBG]
+            # value = 1.0 #[DBG]
 
-            game_shape = (0, *SHAPE)
+            game_shape = (0, *Training.INPUT_SHAPE)
             T_0 = np.empty(shape=game_shape, dtype=np.float32)
             T_1 = np.empty(shape=game_shape, dtype=np.float32)
             T_2 = np.empty(shape=(0,), dtype=np.float32)
 
             for in_mat, out_mat in T_game:
                 T_2 = np.append(T_2, np.array(value, dtype=np.float32).reshape((1,)), axis=0)
-                T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + SHAPE), axis=0)
-                T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + SHAPE), axis=0)
+                T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+                T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
 
             # Save the training data for this game
             np.savez_compressed(
@@ -161,7 +177,7 @@ def main():
                 values=T_2,
             )
 
-        it_shape = (0, *SHAPE)
+        it_shape = (0, *Training.INPUT_SHAPE)
         Ttot_0, Ttot_1, Ttot_2 = (np.empty(shape=it_shape, dtype=np.float32), np.empty(shape=it_shape, dtype=np.float32), np.empty(shape=(0,), dtype=np.float32))
 
         for file in os.listdir(f"data/iteration_{iteration}"):
@@ -183,7 +199,7 @@ def main():
 
         f_theta_new.training((Ttot_0, Ttot_1, Ttot_2))
 
-        print(f"----------- STARTING DUEL OF ITERATION {iteration} -----------")
+        log_header("STARTING DUEL")
 
         old_wins, new_wins = duel(f_theta_new, f_theta, games=N_DUELS)
         

@@ -2,15 +2,17 @@ from engine.board import Board
 from engine.enums import BugType, PlayerColor, BugName
 from engine.game import Bug, Position, Move
 from typing import Any, Optional, TypeAlias
+import numpy as np
 
 # each bug has its own matrix of size SIZE x SIZE x LAYERS 
-Bug_Matrix: TypeAlias = list[list[list[list[float | None]]]]
+Bug_Matrix: TypeAlias = list[list[list[list[float]]]]
 
 class Training:
     SIZE: int = 28
     LAYERS: int = 5
     CENTER: int = SIZE // 2 - 1
     NUM_PIECES: int = BugName.NumPieceNames.value
+    INPUT_SHAPE: tuple[int, int, int] = (NUM_PIECES * LAYERS, SIZE, SIZE)
 
     @staticmethod
     def get_wQ_pos(board: Board) -> Optional[Position]:
@@ -64,7 +66,7 @@ class Training:
             return []
 
         # Initialize matrix
-        matrix: Bug_Matrix = [[[[None for _ in range(Training.SIZE)] for _ in range(Training.SIZE)] for _ in range(Training.LAYERS)] for _ in range(Training.NUM_PIECES)]
+        matrix: Bug_Matrix = [[[[0 for _ in range(Training.SIZE)] for _ in range(Training.SIZE)] for _ in range(Training.LAYERS)] for _ in range(Training.NUM_PIECES)]
 
         # Populate matrix
         for pos, bugs in pos_to_bug.items():
@@ -82,7 +84,7 @@ class Training:
             return []
 
         # Initialize matrix
-        matrix: Bug_Matrix = [[[[None for _ in range(Training.SIZE)] for _ in range(Training.SIZE)] for _ in range(Training.LAYERS)] for _ in range(Training.NUM_PIECES)]
+        matrix: Bug_Matrix = [[[[0 for _ in range(Training.SIZE)] for _ in range(Training.SIZE)] for _ in range(Training.LAYERS)] for _ in range(Training.NUM_PIECES)]
 
         # Populate matrix
         for move, prob in pi.items():
@@ -109,7 +111,7 @@ class Training:
         # as out we only want moved bugs probabilities
         out_pos_to_bug: dict[Position, list[Bug]] = {}
         for move, prob in pi.items():
-            out_pos_to_bug[move.destination] = [None] * len(s._pos_to_bug[move.destination]) + [move.bug]
+            out_pos_to_bug[move.destination] = [0] * len(s._pos_to_bug[move.destination]) + [move.bug]
         
         out_pos_to_bug_centered: dict[Position, list[Bug]] = Training.center_pos(center, out_pos_to_bug)
 
@@ -194,13 +196,15 @@ class Training:
 
 
     @staticmethod
-    def get_dict_from_matrix(matrix: Bug_Matrix, board: Board, abs_origin: Position) -> dict[Move, float]:
+    def get_dict_from_matrix(matrix: np.ndarray, board: Board) -> dict[Move, float]:
 
         move_to_prob: dict[Move, float] = {}
 
+        matrix = matrix.reshape(Training.NUM_PIECES, Training.LAYERS, Training.SIZE, Training.SIZE)
         # Check matrix dimensions safely
-        if not matrix or not matrix[0] or not matrix[0][0] or not matrix[0][0][0]:
-            return move_to_prob # Return empty dict for empty or improperly shaped matrices
+        # if matrix.shape != Training.INPUT_SHAPE:
+        #     raise ValueError("Matrix is empty or improperly shaped")
+        
 
         absolute_center_pos = Training.get_wQ_pos(board) or Position(0, 0)
 

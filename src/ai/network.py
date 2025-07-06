@@ -164,8 +164,19 @@ class NeuralNetwork(nn.Module):
             # OLD:
             # loss_policy: torch.Tensor = policy_criterion(policy_logits, policy_targets)
             # ATTEMPT ALPHA ZERO
-            log_probs = torch.nn.functional.log_softmax(policy_logits, dim=1)
-            loss_policy = policy_criterion(log_probs, policy_targets)  # policy_targets = distribuzione
+            # log_probs = torch.nn.functional.log_softmax(policy_logits, dim=1)
+            # loss_policy = policy_criterion(log_probs, policy_targets)  # policy_targets = distribuzione
+
+            log_probs = F.log_softmax(policy_logits, dim=1)                  # [B, P]
+            policy_targets_flat = policy_targets.view(log_probs.size(0), -1) # [B, P]
+            # loss_policy = policy_criterion(log_probs, policy_targets_flat)
+
+            eps = 1e-8
+            targets = policy_targets_flat + eps
+            targets = targets / targets.sum(dim=1, keepdim=True)
+            policy_criterion = nn.KLDivLoss(reduction="batchmean")
+            loss_policy = policy_criterion(log_probs, targets)
+
 
             loss_value: torch.Tensor = value_criterion(value_preds, value_targets.unsqueeze(1).float())
             combined_loss: torch.Tensor = loss_policy + value_loss_weight * loss_value
@@ -186,6 +197,73 @@ class NeuralNetwork(nn.Module):
         avg_value_loss: float = total_value_loss / len(dataloader) if len(dataloader) > 0 else 0.0
         return avg_loss, avg_policy_loss, avg_value_loss
 
+    # def train_epoch(self,
+    #             dataloader: DataLoader, 
+    #             optimizer: optim.Optimizer, 
+    #             policy_criterion: nn.Module, 
+    #             value_criterion: nn.Module, 
+    #             device: torch.device, 
+    #             value_loss_weight: float = 1.0) -> Tuple[float, float, float]:
+    #     self.train()
+    #     total_loss = total_policy_loss = total_value_loss = 0.0
+
+    #     # Abilita il debug dell’autograd per tracciare esattamente l’operazione che genera nan
+    #     torch.autograd.set_detect_anomaly(True)
+
+    #     for batch_idx, (states, policy_targets, value_targets) in enumerate(dataloader):
+    #         print(f"\n--- Batch {batch_idx} ---")
+    #         # 1) Controlla i dati in ingresso
+    #         print("states:", torch.isnan(states).any().item(),      # True se ci sono nan
+    #             "policy_targets:", torch.isnan(policy_targets).any().item(),
+    #             "value_targets:", torch.isnan(value_targets).any().item())
+
+    #         states = states.to(device)
+    #         policy_targets = policy_targets.to(device)
+    #         value_targets = value_targets.to(device)
+
+    #         optimizer.zero_grad()
+    #         # 2) Forward pass
+    #         policy_logits, value_preds = self(states)
+    #         print("logits min/max:", policy_logits.min().item(), policy_logits.max().item())
+            
+    #         # 3) Log‐softmax
+    #         log_probs = F.log_softmax(policy_logits, dim=1)
+    #         print("log_probs min/max:", log_probs.min().item(), log_probs.max().item())
+
+    #         # 4) Calcola le loss
+    #         #    (adatta qui al criterio che stai usando)
+    #         policy_targets_flat = policy_targets.view(log_probs.size(0), -1)
+    #         loss_policy = -(policy_targets_flat * log_probs).sum(dim=1).mean()
+    #         loss_value = value_criterion(value_preds, value_targets.unsqueeze(1).float())
+    #         print("loss_policy:", loss_policy.item(), "loss_value:", loss_value.item())
+
+    #         combined_loss = loss_policy + value_loss_weight * loss_value
+            
+    #         # 5) Se già qui è nan, possiamo alzare un’eccezione o break
+    #         if torch.isnan(combined_loss).any():
+    #             raise RuntimeError(f"combined_loss è NaN al batch {batch_idx}")
+
+    #         # 6) Backward + gradient clipping
+    #         combined_loss.backward()
+    #         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
+    #         optimizer.step()
+
+    #         total_loss += combined_loss.item()
+    #         total_policy_loss += loss_policy.item()
+    #         total_value_loss += loss_value.item()
+
+    #         # 7) Stampa intermedia
+    #         if batch_idx % 50 == 0:
+    #             print(f"→ Dopo ott {batch_idx}: Loss comb.: {combined_loss.item():.4f}")
+
+    #     # Resto dei calcoli per le medie...
+    #     avg_loss = total_loss / len(dataloader)
+    #     avg_policy_loss = total_policy_loss / len(dataloader)
+    #     avg_value_loss = total_value_loss / len(dataloader)
+    #     return avg_loss, avg_policy_loss, avg_value_loss
+
+
     def train_network(self, 
                     train_data: Tuple[np.ndarray, np.ndarray, np.ndarray], 
                     num_epochs: int = 10, 
@@ -195,7 +273,7 @@ class NeuralNetwork(nn.Module):
                     value_loss_weight: float = 1.0) -> None:
         device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Addestramento su dispositivo: {device}")
-        # model.to(device)
+        self.device = device
         self.to(device)
 
         states_np, policy_targets_np, value_targets_np = train_data
@@ -207,7 +285,8 @@ class NeuralNetwork(nn.Module):
         train_dataset: TensorDataset = TensorDataset(states_tensor, policy_targets_tensor, value_targets_tensor)
         train_dataloader: DataLoader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True if len(train_dataset) > batch_size else False)
 
-        policy_criterion: nn.Module = nn.CrossEntropyLoss() 
+        # policy_criterion: nn.Module = nn.CrossEntropyLoss() 
+        policy_criterion = nn.KLDivLoss(reduction="batchmean")
         value_criterion: nn.Module = nn.MSELoss()
         optimizer: optim.Optimizer = optim.Adam(self.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
@@ -231,16 +310,19 @@ class NeuralNetwork(nn.Module):
         # torch.save(model.state_dict(), "hive_model_final.pth")
         # print("Modello finale salvato come hive_model_final.pth")
 
-        def predict(self, T_in: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-            """
-            Previsione della rete neurale.
-            T_in: Matrice di input
-            """
-            self.eval()
-            with torch.no_grad():
-                T_in_tensor: torch.Tensor = torch.tensor(T_in, dtype=torch.float32).to(self.device)
-                policy_logits, value_output = self(T_in_tensor)
-                return policy_logits.cpu().numpy(), value_output.cpu().numpy()
+    def predict(self, T_in: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Previsione della rete neurale.
+        T_in: Matrice di input
+        Returns:
+            policy_logits: Logits della policy (distribuzione di probabilità)
+            value_output: Valore previsto per lo stato
+        """
+        self.eval()
+        with torch.no_grad():
+            T_in_tensor: torch.Tensor = torch.tensor(T_in, dtype=torch.float32).to(self.device)
+            policy_logits, value_output = self(T_in_tensor)
+            return value_output.cpu().numpy(), policy_logits.cpu().numpy()
             
 
 

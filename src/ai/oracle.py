@@ -82,11 +82,7 @@ class OracleNN(Oracle):
     """
     def __init__(self):
         self.network = NeuralNetwork()
-        self.path = ""
-
-    def predict(self, board: Board) -> tuple[float, Dict[Move, float]]:
-        return self.network.predict(board)
-    
+        self.path = ""    
 
     def training(self, T: tuple[np.ndarray, np.ndarray, np.ndarray]) -> None:
         """
@@ -97,7 +93,7 @@ class OracleNN(Oracle):
             raise ValueError("Neural network is not initialized.")
         self.network.train_network(
             T, 
-            num_epochs=1, 
+            num_epochs=10, 
             batch_size=32, 
             learning_rate=0.001,
             value_loss_weight=0.5 
@@ -123,7 +119,7 @@ class OracleNN(Oracle):
         return new_oracle
     
     def compute_heuristic(self, board) -> float:
-        v, pi = self.predict(board)
+        v, _ = self.predict(board)
         return v
 
     def predict(self, board: Board) -> tuple[float, Dict[Move, float]]:
@@ -131,5 +127,10 @@ class OracleNN(Oracle):
         Predict the value and policy for the given board state.
         """
         T = Training.get_in_mat_from_board(board)
-        v, pi = self.network.predict(T)
+        T = np.array(T, dtype=np.float32).reshape((1, *Training.INPUT_SHAPE))
+        v, pi_mat = self.network.predict(T)
+
+        # print(pi_mat.shape) # (1, 109760)
+
+        pi = Training.get_dict_from_matrix(pi_mat[0], board)
         return v, pi

@@ -102,25 +102,13 @@ class Engine:
         else:
             raise Error("No game in progress. Try 'newgame' to start a new game.")
 
-    def play(self, move: str) -> None:
+    def play(self, move: str, verbose : bool = True) -> None:
         if self.is_active:
             self.board.play(move)
             if self.brain:
                 self.brain.empty_cache()
-            print(self.board)
-            
-            # pi = self.brain.get_moves_probs(self.board)
-            # print(pi)
-            # d = self.board._pos_to_bug
-            # Training.to_matrix(d, self.board.current_player_color)
-
-            # wQ_pos = Training.get_wQ_pos(self.board)
-            
-            # d1 = Training.center_pos(wQ_pos, d)
-            # Training.to_matrix(d1, self.board.current_player_color)
-            # d1_r = Training.rotate_pos(d1)
-            # Training.to_matrix(d1_r, self.board.current_player_color)
-            # Training.get_matrices(self.board, pi)
+            if verbose:
+                print(self.board)
         else:
             raise Error("No game in progress. Try 'newgame' to start a new game.")
 
