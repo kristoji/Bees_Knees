@@ -28,7 +28,7 @@ N_ITERATIONS = 1
 N_GAMES = 5
 N_DUELS = 10
 N_ROLLOUTS = 1000
-ALLOW_DRAWS = 3
+PERC_ALLOWED_DRAWS = 0.2 # [0, 1]
 VERBOSE = True
 # DEBUG = False
 
@@ -117,15 +117,17 @@ def main():
     cons_unsuccess = 0
 
     for iteration in range(N_ITERATIONS):
-        os.makedirs("data/iteration_" + str(iteration), exist_ok=True)
+        ts  = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        os.makedirs(f"data/{ts}/iteration_{iteration}", exist_ok=True)
 
         log_header(f"STARTING ITERATION {iteration}")
 
         game = 0
         draw = 0
+        wins = 0
         while game < N_GAMES:
 
-            log_subheader(f"Game {game} (Draws so far: {draw})")
+            log_subheader(f"Game {game} of {N_GAMES}: {draw}/{wins} [D/W]")
 
             T_game = []
 
@@ -150,8 +152,10 @@ def main():
 
             if ENGINE.board.state == GameState.DRAW:
                 draw += 1
-                if draw > ALLOW_DRAWS * N_GAMES:
+                if draw > PERC_ALLOWED_DRAWS * N_GAMES:
                     continue
+            else:
+                wins += 1
             
             game += 1
             print(f"Game {game} finished with state {ENGINE.board.state.name}")
@@ -171,7 +175,7 @@ def main():
 
             # Save the training data for this game
             np.savez_compressed(
-                f"data/iteration_{iteration}/game_{game}.npz",
+                f"data/{ts}/iteration_{iteration}/game_{game}.npz",
                 in_mats=T_0,
                 out_mats=T_1,
                 values=T_2,
@@ -180,9 +184,9 @@ def main():
         it_shape = (0, *Training.INPUT_SHAPE)
         Ttot_0, Ttot_1, Ttot_2 = (np.empty(shape=it_shape, dtype=np.float32), np.empty(shape=it_shape, dtype=np.float32), np.empty(shape=(0,), dtype=np.float32))
 
-        for file in os.listdir(f"data/iteration_{iteration}"):
+        for file in os.listdir(f"data/{ts}/iteration_{iteration}"):
             if file.endswith(".npz"):
-                data = np.load(f"data/iteration_{iteration}/{file}", allow_pickle=True)
+                data = np.load(f"data/{ts}/iteration_{iteration}/{file}", allow_pickle=True)
                 in_mats = np.array(data['in_mats'], dtype=np.float32)
                 out_mats = np.array(data['out_mats'], dtype=np.float32)
                 values = np.array(data['values'], dtype=np.float32)
