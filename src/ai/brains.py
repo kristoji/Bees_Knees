@@ -187,12 +187,15 @@ class MCTS(Brain):
         "Choose the best successor of node. (Choose a move in the game)"
         if training:
             # assert self.init_node.N == self.num_rollouts, "The number of rollouts must be equal to the number of visits to the root node."
+            # print( sum([child.N for child in self.init_node.children]))
+            # print(self.init_node.N)
+            assert sum([child.N for child in self.init_node.children]) == self.num_rollouts
             rnd = uniform(0, 1)
             for child in self.init_node.children:
                 if rnd <= (portion := child.N / self.num_rollouts):
                     return child
                 rnd -= portion
-            raise Error("No child selected in MCTS.choose()")
+            raise Error(str(rnd) + " - No child selected in MCTS.choose()")
         else:
             def score(n: Node_mcts) -> float:
                 "Score function for the node. Higher is better."
@@ -280,7 +283,7 @@ class MCTS(Brain):
 
 
         if debug:
-            for i in tqdm(range(self.num_rollouts), desc="Rollouts", unit="rollout"):
+            for i in tqdm(range(self.num_rollouts+1), desc="Rollouts", unit="rollout"): # +1 because the first rollout just expands the init node 
                 # print_log("----------------------------------------------")
                 # print_log(f"Rollout {i+1} / 50")
 
@@ -290,7 +293,7 @@ class MCTS(Brain):
                 # print_log(f"Rollout {i+1} / 50 done")
         else:
 
-            for _ in range(self.num_rollouts):
+            for _ in range(self.num_rollouts+1): # +1 because the first rollout just expands the init node 
                 self.do_rollout()
 
     def action_selection(self, training=False) -> str:

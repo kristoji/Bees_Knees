@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from typing import Tuple, List, Any # Aggiunto per i type hint
-from training import Training
+from ai.training import Training
 
 BOARD_HEIGHT: int = Training.SIZE 
 BOARD_WIDTH: int = Training.SIZE 
@@ -161,7 +161,12 @@ class NeuralNetwork(nn.Module):
             optimizer.zero_grad()
             policy_logits, value_preds = self(states) #model
 
-            loss_policy: torch.Tensor = policy_criterion(policy_logits, policy_targets)
+            # OLD:
+            # loss_policy: torch.Tensor = policy_criterion(policy_logits, policy_targets)
+            # ATTEMPT ALPHA ZERO
+            log_probs = torch.nn.functional.log_softmax(policy_logits, dim=1)
+            loss_policy = policy_criterion(log_probs, policy_targets)  # policy_targets = distribuzione
+
             loss_value: torch.Tensor = value_criterion(value_preds, value_targets.unsqueeze(1).float())
             combined_loss: torch.Tensor = loss_policy + value_loss_weight * loss_value
 
