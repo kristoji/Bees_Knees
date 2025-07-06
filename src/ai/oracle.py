@@ -3,6 +3,8 @@ from engine.enums import PlayerColor
 from engine.game import Move
 from typing import Optional, List, Dict
 import numpy as np
+from ai.network import NeuralNetwork
+from ai.training import Training
 
 # -------------------------------- FROM CURRENT BOARD TO CENTERED BOARD ---------------------------------------
 # origin = Training.get_wQ_pos()
@@ -20,7 +22,7 @@ import numpy as np
 
 
 class Oracle:
-    def __init__(self):
+    def __init__(self, nn: bool = False):
         pass
 
     def compute_heuristic(self, board: Board) -> float:
@@ -59,11 +61,75 @@ class Oracle:
             h_arr[i] = h
 
         h_arr /= h_arr.sum()
+        # print("h_arr:", h_arr)
         # softmax = np.exp(h_arr - np.max(h_arr))
         # if softmax.sum() > 0:
         #     h_arr = softmax / softmax.sum()
         # else:
         #     h_arr = np.zeros_like(h_arr)
+        # print("softmax:", softmax)
+        # if len(set(h_arr)) != 1:
+        #     print("h_arr has more than one unique value")
+        #     exit()
 
         pi = {move: prob for move, prob in zip(valid_moves, h_arr)} if h_arr.size > 0 else {}
+        return v, pi
+    
+
+class OracleNN(Oracle):
+    """
+    Oracle that uses a neural network to predict the value and policy of a board state.
+    """
+    def __init__(self):
+        self.network = NeuralNetwork()
+        self.path = ""
+
+    def predict(self, board: Board) -> tuple[float, Dict[Move, float]]:
+        return self.network.predict(board)
+    
+
+    def training(self, T: tuple[np.ndarray, np.ndarray, np.ndarray]) -> None:
+        """
+        Train the neural network with the provided training data.
+        T is a tuple of (in_mats, out_mats, values)
+        """
+        if not self.network:
+            raise ValueError("Neural network is not initialized.")
+        self.network.train_network(
+            T, 
+            num_epochs=1, 
+            batch_size=32, 
+            learning_rate=0.001,
+            value_loss_weight=0.5 
+        )
+
+    def save(self, path: str) -> None:
+        """
+        Save weights
+        """
+        self.path = path
+        self.network.save(path)
+
+
+    def copy(self) -> 'OracleNN':
+        """
+        Create a copy of the Oracle instance.
+        """
+        if not self.path:
+            # self.save("temp.pth") # save in a temp file just to perform the copy
+            raise ValueError("Path is not set. Cannot copy without a path.")
+        new_oracle = OracleNN()
+        new_oracle.network.load(self.path) 
+        return new_oracle
+    
+    def compute_heuristic(self, board) -> float:
+        v, pi = self.predict(board)
+        return v
+
+    def predict(self, board: Board) -> tuple[float, Dict[Move, float]]:
+        """
+        Predict the value and policy for the given board state.
+        """
+        T = Training.get_in_mat_from_board(board)
+        v, pi = self.network.predict(T)
         return v, pi

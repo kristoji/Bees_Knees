@@ -251,12 +251,6 @@ class MCTS(Brain):
 
         return curr_node
 
-    def _simulate(self, node: Node_mcts) -> float:
-        "Returns the reward for a random simulation (to completion) of `node`"
-        # non possiamo scendere in fondo come nella repo: la simulazione si ferma
-        # return 1 - node.reward()
-        return node.reward()
-
     def _backpropagate(self, leaf: Node_mcts, reward: float) -> None:
         "Send the reward back up to the ancestors of the leaf"
         while leaf is not None:

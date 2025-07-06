@@ -5,21 +5,16 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from typing import Tuple, List, Any # Aggiunto per i type hint
+from training import Training
 
-# --- Definizione delle Costanti Specifiche per Hive ---
-# Dimensioni della gameboard
-BOARD_HEIGHT: int = 28
-BOARD_WIDTH: int = 28
+BOARD_HEIGHT: int = Training.SIZE 
+BOARD_WIDTH: int = Training.SIZE 
 
-# Input Features: interpretazione di "28x7x56x56"
-# 28: Numero di tipi di pezzi unici (es. wQ, wS1, ..., bP). Corrisponde a BugName.NumPieceNames.value.
-NUM_UNIQUE_PIECES: int = 28
-# 7: Numero di livelli di stack sulla gameboard 3D.
-NUM_STACK_LEVELS: int = 7
+NUM_UNIQUE_PIECES: int = Training.NUM_PIECES 
+NUM_STACK_LEVELS: int = Training.LAYERS
 
 # Canali totali per l'input della CNN 2D:
-# Per ogni pezzo unico, ci sono NUM_STACK_LEVELS piani 56x56 che indicano la sua presenza a quel livello.
-INPUT_CHANNELS: int = NUM_UNIQUE_PIECES * NUM_STACK_LEVELS # 28 * 7 = 196
+INPUT_CHANNELS: int = NUM_UNIQUE_PIECES * NUM_STACK_LEVELS 
 
 # Output della Policy: un vettore di probabilità con la stessa dimensionalità "28x7x56x56"
 POLICY_OUTPUT_SIZE: int = NUM_UNIQUE_PIECES * NUM_STACK_LEVELS * BOARD_HEIGHT * BOARD_WIDTH # 28 * 7 * 56 * 56 = 615424
@@ -135,90 +130,113 @@ class NeuralNetwork(nn.Module):
         value_output: torch.Tensor = torch.tanh(self.value_fc2(value_x)) 
         
         return policy_logits, value_output
-
-def train_epoch(model: nn.Module, 
-                dataloader: DataLoader, 
-                optimizer: optim.Optimizer, 
-                policy_criterion: nn.Module, 
-                value_criterion: nn.Module, 
-                device: torch.device, 
-                value_loss_weight: float = 1.0) -> Tuple[float, float, float]:
-    model.train()
-    total_loss: float = 0.0
-    total_policy_loss: float = 0.0
-    total_value_loss: float = 0.0
-
-    for batch_idx, (states, policy_targets, value_targets) in enumerate(dataloader):
-        states: torch.Tensor = states.to(device)
-        policy_targets: torch.Tensor = policy_targets.to(device)
-        value_targets: torch.Tensor = value_targets.to(device)
-
-        optimizer.zero_grad()
-        policy_logits, value_preds = model(states)
-
-        loss_policy: torch.Tensor = policy_criterion(policy_logits, policy_targets)
-        loss_value: torch.Tensor = value_criterion(value_preds, value_targets.unsqueeze(1).float())
-        combined_loss: torch.Tensor = loss_policy + value_loss_weight * loss_value
-
-        combined_loss.backward()
-        optimizer.step()
-
-        total_loss += combined_loss.item()
-        total_policy_loss += loss_policy.item()
-        total_value_loss += loss_value.item()
-
-        if batch_idx > 0 and batch_idx % 100 == 0:
-            print(f"  Batch {batch_idx}/{len(dataloader)}: "
-                  f"Loss Totale: {combined_loss.item():.4f} (Policy: {loss_policy.item():.4f}, Value: {loss_value.item():.4f})")
-
-    avg_loss: float = total_loss / len(dataloader) if len(dataloader) > 0 else 0.0
-    avg_policy_loss: float = total_policy_loss / len(dataloader) if len(dataloader) > 0 else 0.0
-    avg_value_loss: float = total_value_loss / len(dataloader) if len(dataloader) > 0 else 0.0
-    return avg_loss, avg_policy_loss, avg_value_loss
-
-def train_network(model: nn.Module, 
-                  train_data: Tuple[np.ndarray, np.ndarray, np.ndarray], 
-                  num_epochs: int = 10, 
-                  batch_size: int = 64, 
-                  learning_rate: float = 0.001, 
-                  weight_decay: float = 1e-4, 
-                  value_loss_weight: float = 1.0) -> None:
-    device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Addestramento su dispositivo: {device}")
-    model.to(device)
-
-    states_np, policy_targets_np, value_targets_np = train_data
     
-    states_tensor: torch.Tensor = torch.tensor(states_np, dtype=torch.float32)
-    policy_targets_tensor: torch.Tensor = torch.tensor(policy_targets_np, dtype=torch.float32) 
-    value_targets_tensor: torch.Tensor = torch.tensor(value_targets_np, dtype=torch.float32)
 
-    train_dataset: TensorDataset = TensorDataset(states_tensor, policy_targets_tensor, value_targets_tensor)
-    train_dataloader: DataLoader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True if len(train_dataset) > batch_size else False)
+    def save(self, path: str) -> None:
+        torch.save(self.state_dict(), path)
+        # print(f"Modello salvato in {path}")
 
-    policy_criterion: nn.Module = nn.CrossEntropyLoss() 
-    value_criterion: nn.Module = nn.MSELoss()
-    optimizer: optim.Optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    def load(self, path: str) -> None:
+        self.load_state_dict(torch.load(path, weights_only=True))
+        # print(f"Modello caricato da {path}")
 
-    print(f"Inizio addestramento per {num_epochs} epoche...")
-    for epoch in range(num_epochs):
-        print(f"\nEpoca {epoch + 1}/{num_epochs}")
-        if len(train_dataloader) == 0:
-            print(" DataLoader è vuoto, impossibile addestrare l'epoca.")
-            continue
-        avg_loss, avg_policy_loss, avg_value_loss = train_epoch(
-            model, train_dataloader, optimizer, policy_criterion, value_criterion, device, value_loss_weight
-        )
-        print(f"Fine Epoca {epoch + 1}: "
-              f"Loss Media: {avg_loss:.4f} (Policy: {avg_policy_loss:.4f}, Value: {avg_value_loss:.4f})")
+    def train_epoch(self,
+                    dataloader: DataLoader, 
+                    optimizer: optim.Optimizer, 
+                    policy_criterion: nn.Module, 
+                    value_criterion: nn.Module, 
+                    device: torch.device, 
+                    value_loss_weight: float = 1.0) -> Tuple[float, float, float]:
+        # model.train()
+        self.train()
+        total_loss: float = 0.0
+        total_policy_loss: float = 0.0
+        total_value_loss: float = 0.0
+
+        for batch_idx, (states, policy_targets, value_targets) in enumerate(dataloader):
+            states: torch.Tensor = states.to(device)
+            policy_targets: torch.Tensor = policy_targets.to(device)
+            value_targets: torch.Tensor = value_targets.to(device)
+
+            optimizer.zero_grad()
+            policy_logits, value_preds = self(states) #model
+
+            loss_policy: torch.Tensor = policy_criterion(policy_logits, policy_targets)
+            loss_value: torch.Tensor = value_criterion(value_preds, value_targets.unsqueeze(1).float())
+            combined_loss: torch.Tensor = loss_policy + value_loss_weight * loss_value
+
+            combined_loss.backward()
+            optimizer.step()
+
+            total_loss += combined_loss.item()
+            total_policy_loss += loss_policy.item()
+            total_value_loss += loss_value.item()
+
+            if batch_idx > 0 and batch_idx % 100 == 0:
+                print(f"  Batch {batch_idx}/{len(dataloader)}: "
+                    f"Loss Totale: {combined_loss.item():.4f} (Policy: {loss_policy.item():.4f}, Value: {loss_value.item():.4f})")
+
+        avg_loss: float = total_loss / len(dataloader) if len(dataloader) > 0 else 0.0
+        avg_policy_loss: float = total_policy_loss / len(dataloader) if len(dataloader) > 0 else 0.0
+        avg_value_loss: float = total_value_loss / len(dataloader) if len(dataloader) > 0 else 0.0
+        return avg_loss, avg_policy_loss, avg_value_loss
+
+    def train_network(self, 
+                    train_data: Tuple[np.ndarray, np.ndarray, np.ndarray], 
+                    num_epochs: int = 10, 
+                    batch_size: int = 64, 
+                    learning_rate: float = 0.001, 
+                    weight_decay: float = 1e-4, 
+                    value_loss_weight: float = 1.0) -> None:
+        device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Addestramento su dispositivo: {device}")
+        # model.to(device)
+        self.to(device)
+
+        states_np, policy_targets_np, value_targets_np = train_data
         
-        # Checkpoint del modello
-        # torch.save(model.state_dict(), f"hive_model_epoch_{epoch+1}.pth")
+        states_tensor: torch.Tensor = torch.tensor(states_np, dtype=torch.float32)
+        policy_targets_tensor: torch.Tensor = torch.tensor(policy_targets_np, dtype=torch.float32) 
+        value_targets_tensor: torch.Tensor = torch.tensor(value_targets_np, dtype=torch.float32)
 
-    print("\nAddestramento completato.")
-    # Salva il modello finale
-    # torch.save(model.state_dict(), "hive_model_final.pth")
-    # print("Modello finale salvato come hive_model_final.pth")
+        train_dataset: TensorDataset = TensorDataset(states_tensor, policy_targets_tensor, value_targets_tensor)
+        train_dataloader: DataLoader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True if len(train_dataset) > batch_size else False)
+
+        policy_criterion: nn.Module = nn.CrossEntropyLoss() 
+        value_criterion: nn.Module = nn.MSELoss()
+        optimizer: optim.Optimizer = optim.Adam(self.parameters(), lr=learning_rate, weight_decay=weight_decay)
+
+        print(f"Inizio addestramento per {num_epochs} epoche...")
+        for epoch in range(num_epochs):
+            print(f"\nEpoca {epoch + 1}/{num_epochs}")
+            if len(train_dataloader) == 0:
+                print(" DataLoader è vuoto, impossibile addestrare l'epoca.")
+                continue
+            avg_loss, avg_policy_loss, avg_value_loss = self.train_epoch(
+                train_dataloader, optimizer, policy_criterion, value_criterion, device, value_loss_weight
+            )
+            print(f"Fine Epoca {epoch + 1}: "
+                f"Loss Media: {avg_loss:.4f} (Policy: {avg_policy_loss:.4f}, Value: {avg_value_loss:.4f})")
+            
+            # Checkpoint del modello
+            # torch.save(model.state_dict(), f"hive_model_epoch_{epoch+1}.pth")
+
+        print("\nAddestramento completato.")
+        # Salva il modello finale
+        # torch.save(model.state_dict(), "hive_model_final.pth")
+        # print("Modello finale salvato come hive_model_final.pth")
+
+        def predict(self, T_in: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+            """
+            Previsione della rete neurale.
+            T_in: Matrice di input
+            """
+            self.eval()
+            with torch.no_grad():
+                T_in_tensor: torch.Tensor = torch.tensor(T_in, dtype=torch.float32).to(self.device)
+                policy_logits, value_output = self(T_in_tensor)
+                return policy_logits.cpu().numpy(), value_output.cpu().numpy()
+            
 
 
 if __name__ == '__main__':
@@ -240,8 +258,7 @@ if __name__ == '__main__':
     
     dummy_train_data: Tuple[np.ndarray, np.ndarray, np.ndarray] = (dummy_states, dummy_policy_targets, dummy_value_targets)
 
-    train_network(
-        hive_net, 
+    hive_net.train_network(
         dummy_train_data, 
         num_epochs=2, 
         batch_size=32, 

@@ -148,6 +148,18 @@ class Training:
             return tp_out
 
     @staticmethod
+    def get_in_mat_from_board(s: Board) -> Bug_Matrix:
+        """
+        Get the input matrix from the board state.
+        """
+        wQ_pos: Optional[Position] = Training.get_wQ_pos(s)
+        if wQ_pos:
+            in_pos_to_bug_centered: dict[Position, list[Bug]] = Training.center_pos(wQ_pos, s._pos_to_bug)
+            return Training.to_in_mat(in_pos_to_bug_centered, s.current_player_color)
+        else:
+            return Training.to_in_mat(s._pos_to_bug, s.current_player_color)
+
+    @staticmethod
     def log_matrix(matrix: Bug_Matrix) -> None:
         # Log the matrix to a file
         return
