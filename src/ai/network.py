@@ -7,6 +7,8 @@ import numpy as np
 from typing import Tuple, List, Any # Aggiunto per i type hint
 from ai.training import Training
 from ai.loader import NpzDataset
+from tqdm import tqdm
+import time
 
 BOARD_HEIGHT: int = Training.SIZE 
 BOARD_WIDTH: int = Training.SIZE 
@@ -141,61 +143,144 @@ class NeuralNetwork(nn.Module):
         self.load_state_dict(torch.load(path, weights_only=True))
         # print(f"Modello caricato da {path}")
 
-    def train_epoch(self,
-                    dataloader: DataLoader, 
-                    optimizer: optim.Optimizer, 
-                    policy_criterion: nn.Module, 
-                    value_criterion: nn.Module, 
-                    device: torch.device, 
-                    value_loss_weight: float = 1.0) -> Tuple[float, float, float]:
-        # model.train()
-        self.train()
-        total_loss: float = 0.0
-        total_policy_loss: float = 0.0
-        total_value_loss: float = 0.0
+    # def train_epoch(self,
+    #                 dataloader: DataLoader, 
+    #                 optimizer: optim.Optimizer, 
+    #                 policy_criterion: nn.Module, 
+    #                 value_criterion: nn.Module, 
+    #                 device: torch.device, 
+    #                 value_loss_weight: float = 1.0) -> Tuple[float, float, float]:
+    #     # model.train()
+    #     self.train()
+    #     total_loss: float = 0.0
+    #     total_policy_loss: float = 0.0
+    #     total_value_loss: float = 0.0
 
-        for batch_idx, (states, policy_targets, value_targets) in enumerate(dataloader):
-            states: torch.Tensor = states.to(device)
-            policy_targets: torch.Tensor = policy_targets.to(device)
-            value_targets: torch.Tensor = value_targets.to(device)
+    #     # for batch_idx, (states, policy_targets, value_targets) in enumerate(dataloader):
+    #     for batch_idx, (states, policy_targets, value_targets) in tqdm(enumerate(dataloader), total=len(dataloader), desc="Training Batches"):
+    #         states: torch.Tensor = states.to(device)
+    #         policy_targets: torch.Tensor = policy_targets.to(device)
+    #         value_targets: torch.Tensor = value_targets.to(device)
+
+    #         optimizer.zero_grad()
+    #         policy_logits, value_preds = self(states) #model
+
+    #         # OLD:
+    #         # loss_policy: torch.Tensor = policy_criterion(policy_logits, policy_targets)
+    #         # ATTEMPT ALPHA ZERO
+    #         # log_probs = torch.nn.functional.log_softmax(policy_logits, dim=1)
+    #         # loss_policy = policy_criterion(log_probs, policy_targets)  # policy_targets = distribuzione
+
+    #         log_probs = F.log_softmax(policy_logits, dim=1)                  # [B, P]
+    #         policy_targets_flat = policy_targets.view(log_probs.size(0), -1) # [B, P]
+    #         # loss_policy = policy_criterion(log_probs, policy_targets_flat)
+
+    #         eps = 1e-8
+    #         targets = policy_targets_flat + eps
+    #         targets = targets / targets.sum(dim=1, keepdim=True)
+    #         policy_criterion = nn.KLDivLoss(reduction="batchmean")
+    #         loss_policy = policy_criterion(log_probs, targets)
+
+
+    #         loss_value: torch.Tensor = value_criterion(value_preds, value_targets.unsqueeze(1).float())
+    #         combined_loss: torch.Tensor = loss_policy + value_loss_weight * loss_value
+
+    #         combined_loss.backward()
+    #         optimizer.step()
+
+    #         total_loss += combined_loss.item()
+    #         total_policy_loss += loss_policy.item()
+    #         total_value_loss += loss_value.item()
+
+    #         if batch_idx > 0 and batch_idx % 100 == 0:
+    #             print(f"  Batch {batch_idx}/{len(dataloader)}: "
+    #                 f"Loss Totale: {combined_loss.item():.4f} (Policy: {loss_policy.item():.4f}, Value: {loss_value.item():.4f})")
+
+    #     avg_loss: float = total_loss / len(dataloader) if len(dataloader) > 0 else 0.0
+    #     avg_policy_loss: float = total_policy_loss / len(dataloader) if len(dataloader) > 0 else 0.0
+    #     avg_value_loss: float = total_value_loss / len(dataloader) if len(dataloader) > 0 else 0.0
+    #     return avg_loss, avg_policy_loss, avg_value_loss
+    
+    def train_epoch(self,
+                dataloader: DataLoader,
+                optimizer: optim.Optimizer,
+                policy_criterion: nn.Module,
+                value_criterion: nn.Module,
+                device: torch.device,
+                value_loss_weight: float = 1.0) -> Tuple[float, float, float]:
+        self.train()
+        total_loss = total_policy_loss = total_value_loss = 0.0
+
+        for batch_idx, (states, policy_targets, value_targets) in tqdm(enumerate(dataloader),
+                                                                    total=len(dataloader),
+                                                                    desc="Training Batches"):
+            start_batch = time.time()
+            # Move data to device
+            t0 = time.time()
+            states = states.to(device)
+            policy_targets = policy_targets.to(device)
+            value_targets = value_targets.to(device)
+            t1 = time.time()
+            # print(f"Batch {batch_idx}: Data transfer time: {t1 - t0:.4f}s | states.shape={states.shape}")
 
             optimizer.zero_grad()
-            policy_logits, value_preds = self(states) #model
 
-            # OLD:
-            # loss_policy: torch.Tensor = policy_criterion(policy_logits, policy_targets)
-            # ATTEMPT ALPHA ZERO
-            # log_probs = torch.nn.functional.log_softmax(policy_logits, dim=1)
-            # loss_policy = policy_criterion(log_probs, policy_targets)  # policy_targets = distribuzione
+            # Forward pass
+            t2 = time.time()
+            policy_logits, value_preds = self(states)
+            t3 = time.time()
+            # print(f"Batch {batch_idx}: Forward time: {t3 - t2:.4f}s | policy_logits.shape={policy_logits.shape}, value_preds.shape={value_preds.shape}")
 
-            log_probs = F.log_softmax(policy_logits, dim=1)                  # [B, P]
-            policy_targets_flat = policy_targets.view(log_probs.size(0), -1) # [B, P]
-            # loss_policy = policy_criterion(log_probs, policy_targets_flat)
+            # Compute policy loss (KL divergence)
+            t4 = time.time()
+            log_probs = F.log_softmax(policy_logits, dim=1)
+            policy_targets_flat = policy_targets.view(log_probs.size(0), -1)
+
+            # # 🔍 DEBUG SNIPPET
+            # if torch.isnan(policy_targets_flat).any():
+            #     print(f"⚠️ Batch {batch_idx}: policy_targets_flat contiene NaN!")
+
+            # if (policy_targets_flat.sum(dim=1) == 0).any():
+            #     print(f"⚠️ Batch {batch_idx}: target con somma zero!")
+
+            # if torch.isnan(log_probs).any():
+            #     print(f"⚠️ Batch {batch_idx}: log_probs contiene NaN!")
+
+            # print(f"Batch {batch_idx}: policy_targets_flat[0][:10] = {policy_targets_flat[0][:10]}")
+            # print(f"Batch {batch_idx}: policy_targets_flat[0] sum = {policy_targets_flat[0].sum().item():.6f}")
 
             eps = 1e-8
-            targets = policy_targets_flat + eps
+            targets = policy_targets_flat 
             targets = targets / targets.sum(dim=1, keepdim=True)
-            policy_criterion = nn.KLDivLoss(reduction="batchmean")
-            loss_policy = policy_criterion(log_probs, targets)
+            kl_loss = nn.KLDivLoss(reduction="batchmean")
+            loss_policy = kl_loss(log_probs, targets)
+            t5 = time.time()
+            # print(f"Batch {batch_idx}: Policy loss time: {t5 - t4:.4f}s | loss_policy={loss_policy.item():.4f}")
 
+            # Compute value loss
+            t6 = time.time()
+            loss_value = value_criterion(value_preds, value_targets.unsqueeze(1).float())
+            t7 = time.time()
+            # print(f"Batch {batch_idx}: Value loss time: {t7 - t6:.4f}s | loss_value={loss_value.item():.4f}")
 
-            loss_value: torch.Tensor = value_criterion(value_preds, value_targets.unsqueeze(1).float())
-            combined_loss: torch.Tensor = loss_policy + value_loss_weight * loss_value
-
+            # Backward and step
+            t8 = time.time()
+            combined_loss = loss_policy + value_loss_weight * loss_value
             combined_loss.backward()
             optimizer.step()
+            t9 = time.time()
+            # print(f"Batch {batch_idx}: Backward+Step time: {t9 - t8:.4f}s | combined_loss={combined_loss.item():.4f}")
 
             total_loss += combined_loss.item()
             total_policy_loss += loss_policy.item()
             total_value_loss += loss_value.item()
 
-            if batch_idx > 0 and batch_idx % 100 == 0:
-                print(f"  Batch {batch_idx}/{len(dataloader)}: "
-                    f"Loss Totale: {combined_loss.item():.4f} (Policy: {loss_policy.item():.4f}, Value: {loss_value.item():.4f})")
+            end_batch = time.time()
+            # print(f"Batch {batch_idx}: Total batch time: {end_batch - start_batch:.4f}s\n")
 
-        avg_loss: float = total_loss / len(dataloader) if len(dataloader) > 0 else 0.0
-        avg_policy_loss: float = total_policy_loss / len(dataloader) if len(dataloader) > 0 else 0.0
-        avg_value_loss: float = total_value_loss / len(dataloader) if len(dataloader) > 0 else 0.0
+        avg_loss = total_loss / len(dataloader) if len(dataloader) > 0 else 0.0
+        avg_policy_loss = total_policy_loss / len(dataloader) if len(dataloader) > 0 else 0.0
+        avg_value_loss = total_value_loss / len(dataloader) if len(dataloader) > 0 else 0.0
         return avg_loss, avg_policy_loss, avg_value_loss
 
     # def train_epoch(self,

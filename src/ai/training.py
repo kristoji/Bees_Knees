@@ -92,7 +92,8 @@ class Training:
             adj_col = col + Training.CENTER
             adj_row = row + Training.CENTER
             layer = len(pos_to_bug[move.destination]) -1 
-            matrix[BugName[str(move.bug)].value][layer][adj_row][adj_col] = prob if move.bug.color == curr_player_color else -prob
+            # matrix[BugName[str(move.bug)].value][layer][adj_row][adj_col] = prob if move.bug.color == curr_player_color else -prob
+            matrix[BugName[str(move.bug)].value][layer][adj_row][adj_col] = prob 
         return matrix
     
     

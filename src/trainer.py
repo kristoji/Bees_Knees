@@ -4,11 +4,13 @@ from ai.training import Training
 from engine.enums import GameState
 from engineer import Engine
 from engine.game import Move
-from ai.oracle import Oracle, OracleNN
+from ai.oracle import Oracle
+from ai.oracleNN import OracleNN
 import numpy as np
 import os
 from datetime import datetime
 import time
+from match_generator import generate_matches
 
     
 
@@ -115,71 +117,18 @@ def main():
 
     for iteration in range(N_ITERATIONS):
         ts  = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        # ts = "2025-07-06_22-36-22"
+        ts = "2025-07-06_22-36-22"
         os.makedirs(f"data/{ts}/iteration_{iteration}", exist_ok=True)
 
         log_header(f"STARTING ITERATION {iteration}")
 
-        game = 0
-        draw = 0
-        wins = 0
-        while game < N_GAMES:
-
-            log_subheader(f"Game {game} of {N_GAMES}: {draw}/{wins} [D/W]")
-
-            T_game = []
-
-            ENGINE.newgame(["Base+MLP"])
-            s = ENGINE.board
-            mcts_game = MCTS(oracle=f_theta, num_rollouts=N_ROLLOUTS)
-            # mcts_game = MCTS(oracle=f_theta, time_limit=5.0)
-            winner = None
-
-            while not winner:
-                # start_time = time.time()
-                mcts_game.run_simulation_from(s, debug=False)
-
-                pi: dict[Move, float] = mcts_game.get_moves_probs()
-                T_game += Training.get_matrices_from_board(s, pi)
-                
-                a: str = mcts_game.action_selection(training=True)
-                # print(f"Action: {a} | Time: {time.time() - start_time:.5f}s | Rollouts: {mcts_game.num_rollouts}")
-                ENGINE.play(a, verbose=VERBOSE)
-                winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
-                # winner = True #[DBG]
-
-            if ENGINE.board.state == GameState.DRAW:
-                draw += 1
-                if draw > PERC_ALLOWED_DRAWS * N_GAMES:
-                    continue
-            else:
-                wins += 1
-            game += 1
-            print(f"Game {game} finished with state {ENGINE.board.state.name}")
-
-            value: float = 1.0 if ENGINE.board.state == GameState.WHITE_WINS else -1.0 if ENGINE.board.state == GameState.BLACK_WINS else 0.0
-            # value = 1.0 #[DBG]
-            # exit() # [DBG]
-
-            game_shape = (0, *Training.INPUT_SHAPE)
-            T_0 = np.empty(shape=game_shape, dtype=np.float32)
-            T_1 = np.empty(shape=game_shape, dtype=np.float32)
-            T_2 = np.empty(shape=(0,), dtype=np.float32)
-
-            for in_mat, out_mat in T_game:
-                T_2 = np.append(T_2, np.array(value, dtype=np.float32).reshape((1,)), axis=0)
-                T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
-                T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
-
-            win_or_draw = "draws" if ENGINE.board.state == GameState.DRAW else "wins"
-
-            # Save the training data for this game
-            np.savez_compressed(
-                f"data/{ts}/iteration_{iteration}/{win_or_draw}/game_{game}.npz",
-                in_mats=T_0,
-                out_mats=T_1,
-                values=T_2,
-            )
+        generate_matches(   
+                            f_theta=f_theta, 
+                            iteration=iteration, 
+                            n_games=N_GAMES, 
+                            n_rollouts=N_ROLLOUTS, 
+                            verbose=VERBOSE, 
+                            perc_allowed_draws=PERC_ALLOWED_DRAWS)
 
 
         if iteration == 0:
