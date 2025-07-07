@@ -84,7 +84,7 @@ class OracleNN(Oracle):
         self.network = NeuralNetwork()
         self.path = ""    
 
-    def training(self, T: tuple[np.ndarray, np.ndarray, np.ndarray]) -> None:
+    def training(self, ts: str, iteration: int) -> None:
         """
         Train the neural network with the provided training data.
         T is a tuple of (in_mats, out_mats, values)
@@ -92,7 +92,8 @@ class OracleNN(Oracle):
         if not self.network:
             raise ValueError("Neural network is not initialized.")
         self.network.train_network(
-            T, 
+            ts=ts, 
+            iteration=iteration,
             num_epochs=10, 
             batch_size=32, 
             learning_rate=0.001,
@@ -133,4 +134,16 @@ class OracleNN(Oracle):
         # print(pi_mat.shape) # (1, 109760)
 
         pi = Training.get_dict_from_matrix(pi_mat[0], board)
+        valid_moves = list(board.get_valid_moves())
+        # Filter pi to only include valid moves
+        pi = {move: prob for move, prob in pi.items() if move in valid_moves}
+        # Softmax the probabilities
+        if pi:
+            probs = np.array(list(pi.values()))
+            probs = np.exp(probs - np.max(probs))
+            probs /= np.sum(probs)
+            pi = {move: prob for move, prob in zip(pi.keys(), probs)}
+        # else:
+        #     raise ValueError("No valid moves found in the board state.")
+
         return v, pi

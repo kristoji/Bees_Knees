@@ -8,6 +8,7 @@ from ai.oracle import Oracle, OracleNN
 import numpy as np
 import os
 from datetime import datetime
+import time
 
     
 
@@ -24,12 +25,13 @@ os.makedirs("models", exist_ok=True)
 ENGINE = Engine()
 
 # PARAMS
-N_ITERATIONS = 1
-N_GAMES = 5
+N_ITERATIONS = 3
+N_GAMES = 50
 N_DUELS = 10
 N_ROLLOUTS = 1000
-PERC_ALLOWED_DRAWS = 0.2 # [0, 1]
-VERBOSE = True
+PERC_ALLOWED_DRAWS = 0.2    # [0, 1]
+VERBOSE = True              # If True, prints the board state after each move
+TIME_LIMIT = 5.0            # seconds for each MCTS simulation
 # DEBUG = False
 
 
@@ -49,8 +51,8 @@ def duel(new_player: Oracle, old_player: Oracle, games: int = 10) -> tuple[float
         s = ENGINE.board
         winner = None
 
-        mcts_game_old = MCTS(oracle=old_player, num_rollouts=N_ROLLOUTS)
-        mcts_game_new = MCTS(oracle=new_player, num_rollouts=N_ROLLOUTS)
+        mcts_game_old = MCTS(oracle=old_player, time_limit=TIME_LIMIT)
+        mcts_game_new = MCTS(oracle=new_player, time_limit=TIME_LIMIT)
 
         white_player = mcts_game_old if game % 2 == 0 else mcts_game_new
         black_player = mcts_game_new if game % 2 == 0 else mcts_game_old
@@ -58,22 +60,17 @@ def duel(new_player: Oracle, old_player: Oracle, games: int = 10) -> tuple[float
 
         while not winner:
 
-            # print(s.turn, end=": ")
             white_player.run_simulation_from(s, debug=False)
             a: str = white_player.action_selection(training=False)
-            # print(a)
             ENGINE.play(a, verbose=VERBOSE)
 
             winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
             if winner:
                 break
 
-            # print(s.turn, end=": ")
             black_player.run_simulation_from(s, debug=False)
             a: str = black_player.action_selection(training=False)
-            # print(a)
             ENGINE.play(a, verbose=VERBOSE)
-
     
             winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
 
@@ -118,6 +115,7 @@ def main():
 
     for iteration in range(N_ITERATIONS):
         ts  = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        # ts = "2025-07-06_22-36-22"
         os.makedirs(f"data/{ts}/iteration_{iteration}", exist_ok=True)
 
         log_header(f"STARTING ITERATION {iteration}")
@@ -134,18 +132,18 @@ def main():
             ENGINE.newgame(["Base+MLP"])
             s = ENGINE.board
             mcts_game = MCTS(oracle=f_theta, num_rollouts=N_ROLLOUTS)
+            # mcts_game = MCTS(oracle=f_theta, time_limit=5.0)
             winner = None
 
             while not winner:
-
-                # print(s.turn, end=": ")
+                # start_time = time.time()
                 mcts_game.run_simulation_from(s, debug=False)
 
                 pi: dict[Move, float] = mcts_game.get_moves_probs()
                 T_game += Training.get_matrices_from_board(s, pi)
                 
                 a: str = mcts_game.action_selection(training=True)
-                # print(a)
+                # print(f"Action: {a} | Time: {time.time() - start_time:.5f}s | Rollouts: {mcts_game.num_rollouts}")
                 ENGINE.play(a, verbose=VERBOSE)
                 winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
                 # winner = True #[DBG]
@@ -156,12 +154,12 @@ def main():
                     continue
             else:
                 wins += 1
-            
             game += 1
             print(f"Game {game} finished with state {ENGINE.board.state.name}")
 
             value: float = 1.0 if ENGINE.board.state == GameState.WHITE_WINS else -1.0 if ENGINE.board.state == GameState.BLACK_WINS else 0.0
             # value = 1.0 #[DBG]
+            # exit() # [DBG]
 
             game_shape = (0, *Training.INPUT_SHAPE)
             T_0 = np.empty(shape=game_shape, dtype=np.float32)
@@ -173,27 +171,15 @@ def main():
                 T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
                 T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
 
+            win_or_draw = "draws" if ENGINE.board.state == GameState.DRAW else "wins"
+
             # Save the training data for this game
             np.savez_compressed(
-                f"data/{ts}/iteration_{iteration}/game_{game}.npz",
+                f"data/{ts}/iteration_{iteration}/{win_or_draw}/game_{game}.npz",
                 in_mats=T_0,
                 out_mats=T_1,
                 values=T_2,
             )
-
-        it_shape = (0, *Training.INPUT_SHAPE)
-        Ttot_0, Ttot_1, Ttot_2 = (np.empty(shape=it_shape, dtype=np.float32), np.empty(shape=it_shape, dtype=np.float32), np.empty(shape=(0,), dtype=np.float32))
-
-        for file in os.listdir(f"data/{ts}/iteration_{iteration}"):
-            if file.endswith(".npz"):
-                data = np.load(f"data/{ts}/iteration_{iteration}/{file}", allow_pickle=True)
-                in_mats = np.array(data['in_mats'], dtype=np.float32)
-                out_mats = np.array(data['out_mats'], dtype=np.float32)
-                values = np.array(data['values'], dtype=np.float32)
-                # Append the data to the total training data
-                Ttot_0 = np.append(Ttot_0, in_mats, axis=0)
-                Ttot_1 = np.append(Ttot_1, out_mats, axis=0)
-                Ttot_2 = np.append(Ttot_2, values, axis=0)
 
 
         if iteration == 0:
@@ -201,7 +187,8 @@ def main():
         else:
             f_theta_new: Oracle = f_theta.copy()
 
-        f_theta_new.training((Ttot_0, Ttot_1, Ttot_2))
+        # f_theta_new.training((Ttot_0, Ttot_1, Ttot_2))
+        f_theta_new.training(ts=ts, iteration=iteration)
 
         log_header("STARTING DUEL")
 

@@ -30,7 +30,6 @@ class Board():
         self.move_strings: list[str] = []
         self.moves: list[Optional[Move]] = []
         self._zobrist_hash: ZobristHash = ZobristHash()
-        self._valid_moves_cache: dict[PlayerColor, Optional[Set[Move]]] = {PlayerColor.WHITE: None, PlayerColor.BLACK: None}
         self._pos_to_bug: dict[Position, list[Bug]] = {}
         self._bug_to_pos: dict[Bug, Optional[Position]] = {}
         for color in PlayerColor:
@@ -47,6 +46,8 @@ class Board():
                 else:
                     self._bug_to_pos[Bug(color, BugType(expansion.name))] = None
         self._draw_counter: dict[int, int] = defaultdict(lambda: 0)
+        self._art_pos: set[Position] = set()
+        self._snapshots: dict[int, set[Move]] = {}
         self._play_initial_moves(moves)
 
     def __str__(self) -> str:
@@ -96,7 +97,6 @@ class Board():
                 move_string = self.stringify_move(move)
             self.move_strings.append(move_string)
             self.moves.append(move)
-            self._valid_moves_cache[self.other_player_color] = None
             
             if move:
 
@@ -136,9 +136,6 @@ class Board():
         if self.state is not GameState.NOT_STARTED and len(self.moves) >= amount:
             if self.state is not GameState.IN_PROGRESS:
                 self.state = GameState.IN_PROGRESS
-            self._valid_moves_cache[self.current_player_color] = None
-            if amount > 1:
-                self._valid_moves_cache[self.other_player_color] = None
             for _ in range(amount):
                 self.turn -= 1
                 self.move_strings.pop()
@@ -183,6 +180,37 @@ class Board():
             return Move.stringify(moved, relative, direction)
         return Move.PASS
 
+
+    def _update_cut_pos(self) -> None:
+        if (graph := {pos for pos, bugs in self._pos_to_bug.items() if bugs}):
+            new_art_pos: set[Position] = set()
+            discovery_times: dict[Position, int] = {}
+            low_link_values: dict[Position, int] = {}
+            parents: dict[Position, Optional[Position]] = {}
+            time: list[int] = [0] # Using list for mutability.
+            # Define DFS for Tarjan's algorithm.
+            def dfs(u: Position):
+                discovery_times[u] = low_link_values[u] = time[0]
+                time[0] += 1
+                children = 0
+                for v in [n for d in Direction if (n := self._get_neighbor(u, d)) in graph]:
+                    if v not in discovery_times:
+                        parents[v] = u
+                        children += 1
+                        dfs(v)
+                        low_link_values[u] = min(low_link_values[u], low_link_values[v])
+                        if parents.get(u) is None and children > 1:
+                            new_art_pos.add(u)
+                        if parents.get(u) is not None and low_link_values[v] >= discovery_times[u]:
+                            new_art_pos.add(u)
+                    elif v != parents.get(u):
+                        low_link_values[u] = min(low_link_values[u], discovery_times[v])
+            # Run DFS starting from any node, since the graph is connected.
+            dfs(next(iter(graph)))
+            # Update current articulation positions.
+            self._art_pos.clear()
+            self._art_pos.update(new_art_pos)
+
     def count_queen_neighbors(self, color: PlayerColor = current_player_color) -> int:
         return sum(
             bool(self._bugs_from_pos(self._get_neighbor(queen_pos, d)))
@@ -222,14 +250,14 @@ class Board():
         else:
             raise Error(f"Expected {self.turn} moves but got {len(moves)}")
 
-    def get_valid_moves(self, color: PlayerColor = None) -> Set[Move]:
-        if color is None:
-            color = self.current_player_color
-        if self._valid_moves_cache[color] is None:
+    def get_valid_moves(self) -> Set[Move]:
+        
+        if not self.zobrist_key in self._snapshots:
             moves = set()
             if self.state in (GameState.NOT_STARTED, GameState.IN_PROGRESS):
+                self._update_cut_pos()
                 for bug, pos in self._bug_to_pos.items():
-                    if bug.color is color:
+                    if bug.color is self.current_player_color:
                         if self.turn == 0:
                             if bug.type is not BugType.QUEEN_BEE and self._can_bug_be_played(bug):
                                 moves.add(Move(bug, None, self.ORIGIN))
@@ -246,7 +274,7 @@ class Board():
                                 or bug.type is BugType.QUEEN_BEE
                             ):
                                 moves.update(
-                                    Move(bug, None, placement) for placement in self._get_valid_placements(color)
+                                    Move(bug, None, placement) for placement in self._get_valid_placements(self.current_player_color)
                                 )
                         elif self.current_player_queen_in_play and self._bugs_from_pos(pos)[-1] == bug and self._was_not_last_moved(bug):
                             if len(self._bugs_from_pos(pos)) > 1 or self._can_move_without_breaking_hive(pos):
@@ -274,8 +302,8 @@ class Board():
                                         moves.update(self._get_mosquito_moves(bug, pos, True))
                                     case BugType.PILLBUG:
                                         moves.update(self._get_pillbug_special_moves(pos))
-            self._valid_moves_cache[color] = moves
-        return self._valid_moves_cache[color] or set()
+            self._snapshots[self.zobrist_key] = moves
+        return self._snapshots[self.zobrist_key] or set()
 
     def _get_valid_placements(self, color: PlayerColor = current_player_color) -> Set[Position]:
         return {
@@ -408,22 +436,23 @@ class Board():
         return moves
 
     def _can_move_without_breaking_hive(self, position: Position) -> bool:
-        # assert self._bugs_from_pos(position)
-        neighbors = [self._bugs_from_pos(self._get_neighbor(position, d)) for d in Direction.flat()]
-        if sum(bool(neighbors[i] and not neighbors[i - 1]) for i in range(len(neighbors))) > 1:
-            visited: set[Position] = set()
-            # neighbors_pos = [self._pos_from_bug(bugs[-1]) for bugs in neighbors if bugs]
-            neighbors_pos = [self._pos_from_bug(bugs[-1]) for bugs in neighbors if bugs and (self._pos_from_bug(bugs[-1]) is not None)]
-            stack: set[Position] = {neighbors_pos[0]} if neighbors_pos else set()
-            while stack:
-                current = stack.pop()
-                visited.add(current)
-                for d in Direction.flat():
-                    neighbor = self._get_neighbor(current, d)
-                    if neighbor != position and self._bugs_from_pos(neighbor) and neighbor not in visited:
-                        stack.add(neighbor)
-            return all(pos in visited for pos in neighbors_pos)
-        return True
+        # # assert self._bugs_from_pos(position)
+        # neighbors = [self._bugs_from_pos(self._get_neighbor(position, d)) for d in Direction.flat()]
+        # if sum(bool(neighbors[i] and not neighbors[i - 1]) for i in range(len(neighbors))) > 1:
+        #     visited: set[Position] = set()
+        #     # neighbors_pos = [self._pos_from_bug(bugs[-1]) for bugs in neighbors if bugs]
+        #     neighbors_pos = [self._pos_from_bug(bugs[-1]) for bugs in neighbors if bugs and (self._pos_from_bug(bugs[-1]) is not None)]
+        #     stack: set[Position] = {neighbors_pos[0]} if neighbors_pos else set()
+        #     while stack:
+        #         current = stack.pop()
+        #         visited.add(current)
+        #         for d in Direction.flat():
+        #             neighbor = self._get_neighbor(current, d)
+        #             if neighbor != position and self._bugs_from_pos(neighbor) and neighbor not in visited:
+        #                 stack.add(neighbor)
+        #     return all(pos in visited for pos in neighbors_pos)
+        # return True
+        return position not in self._art_pos
 
     def _can_bug_be_played(self, piece: Bug) -> bool:
         # assert piece.pos is None

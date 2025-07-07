@@ -175,13 +175,15 @@ def print_log2(msg: str) -> None:
 class MCTS(Brain):
     "Monte Carlo tree searcher. First rollout the tree then choose a move."
 
-    def __init__(self, oracle: Oracle, exploration_weight: int = 1, num_rollouts: int = 1000) -> None:
+    def __init__(self, oracle: Oracle, exploration_weight: int = 1, num_rollouts: int = 1000, time_limit: float = float("inf")) -> None:
         super().__init__()
         self.init_node = None
         self.init_board = None  # the board to be used for the next rollout
         self.exploration_weight = exploration_weight
         self.num_rollouts = num_rollouts
         self.oracle = oracle
+        self.time_limit = time_limit
+        self.epsilon = 0.05  # small value to avoid time limit issues
 
     def choose(self, training:bool) -> Node_mcts:
         "Choose the best successor of node. (Choose a move in the game)"
@@ -280,21 +282,21 @@ class MCTS(Brain):
         self.init_node = Node_mcts(last_move)
 
         self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key, 0)
+        self._select_and_expand() # expand the root node without updating N (in order to get root.N = sum(children.N))
 
-
-        if debug:
-            for i in tqdm(range(self.num_rollouts+1), desc="Rollouts", unit="rollout"): # +1 because the first rollout just expands the init node 
-                # print_log("----------------------------------------------")
-                # print_log(f"Rollout {i+1} / 50")
-
+        if self.time_limit < float("inf"):
+            self.num_rollouts = 0
+            start_time = time()
+            while time() - start_time < self.time_limit - self.epsilon:
                 self.do_rollout()
-
-                # print_log(f"N = {self.init_node.N}\n Q = {self.init_node.Q}")
-                # print_log(f"Rollout {i+1} / 50 done")
+                self.num_rollouts += 1
         else:
-
-            for _ in range(self.num_rollouts+1): # +1 because the first rollout just expands the init node 
-                self.do_rollout()
+            if debug:
+                for _ in tqdm(range(self.num_rollouts), desc="Rollouts", unit="rollout"):
+                    self.do_rollout()
+            else:
+                for _ in range(self.num_rollouts):
+                    self.do_rollout()
 
     def action_selection(self, training=False) -> str:
         # , board: Board
