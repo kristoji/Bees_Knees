@@ -18,9 +18,12 @@ os.makedirs("data", exist_ok=True)
 
 # GLOBAL CONSTANTS
 N_GAMES = 500
-N_ROLLOUTS = 1500
+N_ROLLOUTS = 1000
 VERBOSE = False  # If True, prints the board state after each move
 CORES = 2       # Number of parallel processes to use
+SHORT = 50
+LONG = 100
+SUPERLONG = 200
 
 
 def log_header(title: str, width: int = 60, char: str = '='):
@@ -56,7 +59,7 @@ def simulate_game(args):
     num_moves = 0
 
     # Play until end
-    while not winner:
+    while not winner and num_moves < SUPERLONG:
         mcts.run_simulation_from(state, debug=False)
         pi = mcts.get_moves_probs()
         T_game += Training.get_matrices_from_board(state, pi)
@@ -65,6 +68,14 @@ def simulate_game(args):
         state = engine.board
         winner = state.state != GameState.IN_PROGRESS
         num_moves += 1
+        
+        if num_moves % 10 == 0:
+            print(f"  Game {game_id}: Move {num_moves}")
+
+    # Check if game exceeded maximum moves
+    if num_moves >= SUPERLONG:
+        print(f"  Game {game_id} exceeded maximum moves ({SUPERLONG}). Discarded.")
+        return ("discarded", "superlong")
 
     # Determine result and folder names
     if state.state == GameState.DRAW:
@@ -75,8 +86,8 @@ def simulate_game(args):
         value = 1.0 if state.state == GameState.WHITE_WINS else -1.0
 
     length_dir = (
-        "short" if num_moves < 50 else
-        "long" if num_moves < 100 else
+        "short" if num_moves < SHORT else
+        "long" if num_moves < LONG else
         "superlong"
     )
 
@@ -110,12 +121,25 @@ def generate_matches(iteration: int = 0) -> None:
     os.makedirs(os.path.join("data", ts, f"iteration_{iteration}"), exist_ok=True)
 
     # Prepare arguments for each game
-    args = [(i, ts) for i in range(N_GAMES)]
+    args = [(i, ts, iteration) for i in range(N_GAMES)]
 
     # Parallel execution
+    completed = 0
+    discarded = 0
+    draws = 0
+    wins = 0
+    
     with mp.Pool(processes=CORES) as pool:
         for idx, (result, length) in enumerate(pool.imap_unordered(simulate_game, args), 1):
-            log_header(f"Completed {idx}/{N_GAMES}: {result} ({length})")
+            if result == "discarded":
+                discarded += 1
+            elif result == "draws":
+                draws += 1
+            else:
+                wins += 1
+            completed += 1
+            
+            log_header(f"Completed {completed}/{N_GAMES}: {result} ({length}) - W:{wins} D:{draws} X:{discarded}")
 
     print("Generation complete.")
 
