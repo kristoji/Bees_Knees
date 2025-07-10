@@ -112,12 +112,15 @@ def main():
 
     reset_log()
     
-    f_theta = Oracle()
+    #f_theta = Oracle()
+    f_theta: Oracle = OracleNN()  # Use the neural network version of the oracle
+    f_theta.training(ts="pro_matches", iteration=0)  # Initial training
+
     cons_unsuccess = 0
 
     for iteration in range(N_ITERATIONS):
         ts  = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        ts = "2025-07-06_22-36-22"
+        #ts = "2025-07-06_22-36-22"
         os.makedirs(f"data/{ts}/iteration_{iteration}", exist_ok=True)
 
         log_header(f"STARTING ITERATION {iteration}")
