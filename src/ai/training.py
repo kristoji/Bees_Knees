@@ -62,8 +62,8 @@ class Training:
     
     @staticmethod
     def to_in_mat(pos_to_bug: dict[Position, list[Bug]], curr_player_color: PlayerColor) -> Bug_Matrix:
-        if not pos_to_bug:
-            return []
+        # if not pos_to_bug: # we allow empty boards for initial position
+        #     return []
 
         # Initialize matrix
         matrix: Bug_Matrix = [[[[0 for _ in range(Training.SIZE)] for _ in range(Training.SIZE)] for _ in range(Training.LAYERS)] for _ in range(Training.NUM_PIECES)]

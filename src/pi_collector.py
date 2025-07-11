@@ -62,6 +62,8 @@ def generate_matches(source_folder:str, verbose: bool = False) -> None:
         s = engine.board
 
         T_game = []
+        values = []
+        value = 1.0
 
         moves = parse_hive_game(os.path.join(source_folder, f))
 
@@ -72,28 +74,31 @@ def generate_matches(source_folder:str, verbose: bool = False) -> None:
 
             pi = {move: 1.0 if move == s._parse_move(m)  else 0.0 for move in s.get_valid_moves()}
 
-            T_game += Training.get_matrices_from_board(s, pi)
-            
+            mats = Training.get_matrices_from_board(s, pi)
+            T_game += mats
+            values += [value] * len(mats)
+            value *= -1.0  # Alternate value for each move
+
             engine.play(m, verbose=verbose)
         
         log_subheader(f"Game {game} finished")
 
         # value: float = 0.0 #dummy
         value: float = 1.0 if engine.board.state == GameState.WHITE_WINS else -1.0 if engine.board.state == GameState.BLACK_WINS else 0.0
-        
+        values = [v * value for v in values]  # Adjust values based on the final game state
 
-        exit()  # For debugging purposes, remove this line in production
-
-        # -------------- 1st VERSION  --------------
         game_shape = (0, *Training.INPUT_SHAPE)
         T_0 = np.empty(shape=game_shape, dtype=np.float32)
         T_1 = np.empty(shape=game_shape, dtype=np.float32)
-        T_2 = np.empty(shape=(0,), dtype=np.float32)
+        T_2 = np.array(values, dtype=np.float32)
 
         for in_mat, out_mat in T_game:
-            T_2 = np.append(T_2, np.array(value, dtype=np.float32).reshape((1,)), axis=0)
+            # print("-", end="", flush=True)
+            # print(in_mat, end="", flush=True)
             T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
             T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+
+        assert T_0.shape[0] == T_1.shape[0] == T_2.shape[0], "Shapes of input matrices do not match"
 
         # Create the subdirectories for saving
         save_dir = f"data/{ts}/pro_matches"
