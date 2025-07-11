@@ -8,6 +8,7 @@ import numpy as np
 import re
 import os
 from datetime import datetime
+import json
 
 # PARAMS
 VERBOSE = True              # If True, prints the board state after each move
@@ -46,7 +47,7 @@ def parse_hive_game(file_path: str) -> list[str]:
     return moves
 
 
-def generate_matches(source_folder:str, verbose: bool = False) -> None:
+def generate_matches(source_folder:str, verbose: bool = False, save_matrices: bool = True) -> None:
 
     engine = Engine()
 
@@ -62,61 +63,71 @@ def generate_matches(source_folder:str, verbose: bool = False) -> None:
         s = engine.board
 
         T_game = []
+        T_values = []
+        pi_list = []
         values = []
         value = 1.0
 
         moves = parse_hive_game(os.path.join(source_folder, f))
 
-        # for m in moves:
-        #     print(m)
+        for san in moves:
 
-        for m in moves:
+            val_moves = s.get_valid_moves()
+            pi = {move: 1.0 if move == s._parse_move(san)  else 0.0 for move in val_moves}
+            pi_list.append([(s.stringify_move(move), prob) for move, prob in pi.items()])
 
-            pi = {move: 1.0 if move == s._parse_move(m)  else 0.0 for move in s.get_valid_moves()}
-
-            mats = Training.get_matrices_from_board(s, pi)
-            T_game += mats
-            values += [value] * len(mats)
+            if save_matrices:
+                mats = Training.get_matrices_from_board(s, pi)
+                T_game += mats
+                T_values += [value] * len(mats)
+            
+            values.append(value)
             value *= -1.0  # Alternate value for each move
 
-            engine.play(m, verbose=verbose)
+            engine.play(san, verbose=verbose)
         
         log_subheader(f"Game {game} finished")
 
         # value: float = 0.0 #dummy
         value: float = 1.0 if engine.board.state == GameState.WHITE_WINS else -1.0 if engine.board.state == GameState.BLACK_WINS else 0.0
-        values = [v * value for v in values]  # Adjust values based on the final game state
+        T_values = [v * value for v in T_values]  # Adjust T_values based on the final game state
 
-        game_shape = (0, *Training.INPUT_SHAPE)
-        T_0 = np.empty(shape=game_shape, dtype=np.float32)
-        T_1 = np.empty(shape=game_shape, dtype=np.float32)
-        T_2 = np.array(values, dtype=np.float32)
 
-        for in_mat, out_mat in T_game:
-            # print("-", end="", flush=True)
-            # print(in_mat, end="", flush=True)
-            T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
-            T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
-
-        assert T_0.shape[0] == T_1.shape[0] == T_2.shape[0], "Shapes of input matrices do not match"
-
-        # Create the subdirectories for saving
+        v_pi_list = list(zip(pi_list, T_values))
         save_dir = f"data/{ts}/pro_matches"
-        os.makedirs(save_dir, exist_ok=True)
+        path = os.path.join(save_dir, f"game_{game}.json")
+        log_subheader(f"Saving pi and values list in {path}")
+        with open(path, 'w') as f:
+            json.dump(v_pi_list, f)
 
-        log_subheader(f"Saving game {game} in {save_dir}/game_{game}.npz")
+        if save_matrices:
+            game_shape = (0, *Training.INPUT_SHAPE)
+            T_0 = np.empty(shape=game_shape, dtype=np.float32)
+            T_1 = np.empty(shape=game_shape, dtype=np.float32)
+            T_2 = np.array(T_values, dtype=np.float32)
 
-        # Save the training data for this game
-        np.savez_compressed(
-            f"{save_dir}/game_{game}.npz",
-            in_mats=T_0,
-            out_mats=T_1,
-            values=T_2,
-        )
+            for in_mat, out_mat in T_game:
+                T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+                T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
 
-        log_subheader(f"Saving board state in {save_dir}/board_{game}.txt")
+            assert T_0.shape[0] == T_1.shape[0] == T_2.shape[0], "Shapes of input matrices do not match"
 
-        with open(f"{save_dir}/board_{game}.txt", "w") as f:
+            # Create the subdirectories for saving
+            os.makedirs(save_dir, exist_ok=True)
+
+            log_subheader(f"Saving game {game} in {save_dir}/game_{game}.npz")
+                
+            # Save the training data for this game
+            np.savez_compressed(
+                f"{save_dir}/game_{game}.npz",
+                in_mats=T_0,
+                out_mats=T_1,
+                values=T_2,
+            )
+
+        log_subheader(f"Saving board state in {save_dir}/game_{game}_board.txt")
+
+        with open(f"{save_dir}/game_{game}_board.txt", "w") as f:
             f.write(str(engine.board))
 
         if game >= GAME_TO_PARSE:
