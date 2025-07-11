@@ -112,7 +112,8 @@ class Training:
         # as out we only want moved bugs probabilities
         out_pos_to_bug: dict[Position, list[Bug]] = {}
         for move, prob in pi.items():
-            out_pos_to_bug[move.destination] = [0] * len(s._pos_to_bug[move.destination]) + [move.bug]
+            # out_pos_to_bug[move.destination] = [0] * len(s._pos_to_bug[move.destination]) + [move.bug]
+            out_pos_to_bug[move.destination] = [0] * len(s._bugs_from_pos(move.destination)) + [move.bug]
         
         out_pos_to_bug_centered: dict[Position, list[Bug]] = Training.center_pos(center, out_pos_to_bug)
 

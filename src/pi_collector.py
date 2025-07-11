@@ -1,6 +1,6 @@
 from ai.brains import MCTS
 from ai.training import Training
-from engine.enums import GameState
+from engine.enums import GameState, PlayerColor
 from engineer import Engine
 from engine.game import Move
 from ai.oracle import Oracle
@@ -11,7 +11,8 @@ from datetime import datetime
 
 # PARAMS
 VERBOSE = True              # If True, prints the board state after each move
-PRO_MATCHES_FOLDER = "pro_matches/pgn_2011"
+# PRO_MATCHES_FOLDER = "pro_matches/pgn_2011"
+PRO_MATCHES_FOLDER = "pro_matches/"
 GAME_TO_PARSE = 1000
 
 def log_header(title: str, width: int = 60, char: str = '='):
@@ -38,14 +39,9 @@ def parse_hive_game(file_path: str) -> list[str]:
             if not line or line.startswith('['):
                 continue  # Skip empty lines and metadata
 
-            match = move_line_pattern.match(line)
-            if match:
-                rest = match.group(1)
-                # Split remaining line by space, remove empty strings
-                for move in rest.split():
-                    # Remove trailing backslash (from line continuations)
-                    move = move.rstrip('\\')
-                    moves.append(move)
+            move = line.split('.')[1].strip()
+            
+            moves.append(move)
 
     return moves
 
@@ -69,18 +65,24 @@ def generate_matches(source_folder:str, verbose: bool = False) -> None:
 
         moves = parse_hive_game(os.path.join(source_folder, f))
 
+        # for m in moves:
+        #     print(m)
+
         for m in moves:
 
             pi = {move: 1.0 if move == s._parse_move(m)  else 0.0 for move in s.get_valid_moves()}
+
             T_game += Training.get_matrices_from_board(s, pi)
             
             engine.play(m, verbose=verbose)
         
         log_subheader(f"Game {game} finished")
 
-        value: float = 0.0 #dummy
+        # value: float = 0.0 #dummy
+        value: float = 1.0 if engine.board.state == GameState.WHITE_WINS else -1.0 if engine.board.state == GameState.BLACK_WINS else 0.0
+        
 
-        #exit()  # For debugging purposes, remove this line in production
+        exit()  # For debugging purposes, remove this line in production
 
         # -------------- 1st VERSION  --------------
         game_shape = (0, *Training.INPUT_SHAPE)
@@ -92,7 +94,6 @@ def generate_matches(source_folder:str, verbose: bool = False) -> None:
             T_2 = np.append(T_2, np.array(value, dtype=np.float32).reshape((1,)), axis=0)
             T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
             T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
-
 
         # Create the subdirectories for saving
         save_dir = f"data/{ts}/pro_matches"
