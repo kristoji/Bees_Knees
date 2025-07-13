@@ -1,19 +1,16 @@
-from ai.brains import MCTS
 from ai.training import Training
-from engine.enums import GameState, PlayerColor
+from engine.enums import GameState
 from engineer import Engine
-from engine.game import Move
-from ai.oracle import Oracle
 import numpy as np
-import re
 import os
 from datetime import datetime
 import json
+import zipfile
+import gen_dataset.convert_sfg_to_pgn as convert_sfg_to_pgn
 
 # PARAMS
 VERBOSE = True              # If True, prints the board state after each move
-# PRO_MATCHES_FOLDER = "pro_matches/pgn_2011"
-PRO_MATCHES_FOLDER = "pro_matches/"
+PRO_MATCHES_FOLDER = "pro_matches/games-Apr-3-2024/pgn"
 GAME_TO_PARSE = 1000
 
 def log_header(title: str, width: int = 60, char: str = '='):
@@ -30,9 +27,43 @@ def log_subheader(title: str, width: int = 50, char: str = '-'):
     print(f"{bar}", flush=True)
 
 
-def parse_hive_game(file_path: str) -> list[str]:
+def unzip_new_archives(directory: str) -> None:
+    """
+    if you pass "pro_matches/" as directory, it will unzip all the .zip files in that folder
+    that arent already unzipped.
+    """
+    # Make sure the directory exists
+    if not os.path.isdir(directory):
+        raise ValueError(f"Directory not found: {directory}")
+
+    for filename in os.listdir(directory):
+        if not filename.lower().endswith('.zip'):
+            continue
+
+        zip_path = os.path.join(directory, filename)
+        extract_to = os.path.join(directory, os.path.splitext(filename)[0])
+
+        # Check if already extracted: folder exists and has at least one file
+        if os.path.isdir(extract_to) and os.listdir(extract_to):
+            print(f"Skipping '{filename}': already extracted.")
+            continue
+
+        # Create the output folder if needed
+        os.makedirs(extract_to, exist_ok=True)
+
+        # Extract
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                zf.extractall(extract_to)
+            print(f"Extracted '{filename}' → '{extract_to}/'")
+        except zipfile.BadZipFile:
+            print(f"Warning: '{filename}' is not a valid zip archive.")
+
+
+
+
+def parse_pgn(file_path: str) -> list[str]:
     moves = []
-    move_line_pattern = re.compile(r'^\d+\.\s+(.*)$')
 
     with open(file_path, 'r') as f:
         for line in f:
@@ -72,7 +103,7 @@ def save_matrices(T_game, T_values, game, save_dir):
         values=T_2,
     )
 
-def generate_matches(source_folder:str, verbose: bool = False, want_matrices: bool = True) -> None:
+def generate_matches(source_folder:str, verbose: bool = False, want_matrices: bool = True, want_graphs: bool = True) -> None:
 
     engine = Engine()
 
@@ -83,6 +114,8 @@ def generate_matches(source_folder:str, verbose: bool = False, want_matrices: bo
 
     # loop ont he file in folder source_folder
     for f in os.listdir(source_folder):
+        if not f.endswith('.pgn'):
+            continue
 
         engine.newgame(["Base+MLP"])
         s = engine.board
@@ -93,7 +126,7 @@ def generate_matches(source_folder:str, verbose: bool = False, want_matrices: bo
         values = []
         value = 1.0
 
-        moves = parse_hive_game(os.path.join(source_folder, f))
+        moves = parse_pgn(os.path.join(source_folder, f))
 
         for san in moves:
 
@@ -127,6 +160,7 @@ def generate_matches(source_folder:str, verbose: bool = False, want_matrices: bo
 
         if want_matrices:
             save_matrices(T_game, T_values, game, save_dir)
+
         if want_graphs:
             save_graphs()
 
@@ -148,7 +182,6 @@ if "__main__" == __name__:
         BASE_PATH = BASE_PATH[:-3]
     print(BASE_PATH, flush=True)
     os.chdir(BASE_PATH)  # Change working directory to the base path
-    os.makedirs("data", exist_ok=True)
 
     source_folder = PRO_MATCHES_FOLDER
 

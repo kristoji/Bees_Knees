@@ -1,0 +1,61 @@
+[GameType "Base+MLP"]
+[Date "2024.03.31"]
+[Event ""]
+[Site "boardspace.net"]
+[Round ""]
+[White "sjfreitag"]
+[Black "Dumbot"]
+[Result "0-1"]
+
+1. wB1
+2. bL /wB1
+3. wQ wB1-
+4. bA1 bL\
+5. wA1 \wQ
+6. bG1 -bL
+7. wA1 bA1\
+8. bQ /bL
+9. wG1 \wQ
+10. bQ /bG1
+11. wA1 /bQ
+12. bS1 \bG1
+13. wG1 bQ-
+14. bS1 \wQ
+15. wS1 wA1\
+16. bA1 wQ\
+17. wS1 -bQ
+18. bS2 /bA1
+19. wA1 /bS2
+20. bG1 wS1\
+21. wB2 \wS1
+22. bG1 \wB2
+23. wL /wS1
+24. bB1 bA1-
+25. wA1 bB1-
+26. bS2 wA1\
+27. wL bQ/
+28. bM /bB1
+29. wA2 wG1\
+30. bB2 -bM
+31. wA2 /bB2
+32. bA2 bS2\
+33. wS2 -wS1
+34. bA2 /wS2
+35. wM wA1/
+36. bS2 wM/
+37. wG2 wA2\
+38. bG2 -bA2
+39. wG2 bL\
+40. bB2 wA2
+41. wA3 wA1\
+42. bM wA3\
+43. wP \wL
+44. bA3 bB2\
+45. wG3 wM\
+46. bG3 bA2\
+47. wG3 bL-
+48. bL wQ/
+49. wB1 wG3
+50. bA3 -wQ
+51. wB1 wG2
+52. bS2 wQ-

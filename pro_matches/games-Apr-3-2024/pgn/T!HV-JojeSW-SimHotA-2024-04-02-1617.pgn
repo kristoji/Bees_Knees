@@ -1,0 +1,60 @@
+[GameType "Base+MLP"]
+[Date "2024.04.02"]
+[Event ""]
+[Site "boardspace.net"]
+[Round ""]
+[White "JojeSW"]
+[Black "SimHotA"]
+[Result "0-1"]
+
+1. wL
+2. bL /wL
+3. wM wL/
+4. bM /bL
+5. wA1 \wL
+6. bQ \bM
+7. wQ wM\
+8. bA1 bL\
+9. wM bA1-
+10. bM wA1/
+11. wA2 wQ/
+12. bP -bQ
+13. wP wQ-
+14. bA2 /bP
+15. wA2 /bA2
+16. bA3 /bQ
+17. wA3 wP/
+18. bA3 \wA3
+19. wG1 wP-
+20. bS1 bM/
+21. wG1 bQ/
+22. bB1 bA3/
+23. wG1 bS1/
+24. bB1 bA3
+25. wS1 wP-
+26. bB1 wA3
+27. wS1 bA3/
+28. bB1 wP
+29. wG2 -wA1
+30. bB2 bB1\
+31. wG2 bM\
+32. bB2 bB1
+33. wG3 wG1/
+34. bB2 wQ
+35. wA1 /bQ
+36. bP \bQ
+37. wG3 /bM
+38. bG1 /bA1
+39. wS2 wM-
+40. bG1 \wM
+41. wL /bA1
+42. bP /wG3
+43. wG2 \bP
+44. bG2 \bM
+45. wB1 -wG2
+46. bG2 wG3-
+47. wG3 wG1/
+48. bS2 bP-
+49. wS2 bB1-
+50. bL wM/
+51. wM \bB1

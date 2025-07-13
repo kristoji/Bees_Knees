@@ -1,0 +1,45 @@
+[GameType "Base+MLP"]
+[Date "2024.03.31"]
+[Event ""]
+[Site "boardspace.net"]
+[Round ""]
+[White "OrdepCubik"]
+[Black "bigmeep"]
+[Result "1-0"]
+
+1. wL
+2. bL /wL
+3. wM wL/
+4. bQ -bL
+5. wQ wM\
+6. bA1 bQ\
+7. wA1 \wL
+8. bA1 -wA1
+9. wM /bQ
+10. bA2 bL\
+11. wP wQ/
+12. bM \bA1
+13. wB1 \wQ
+14. bA2 wQ\
+15. wA2 wP-
+16. bM wA2/
+17. wA3 \wP
+18. bB1 /bA2
+19. wA3 bB1\
+20. bB2 bA2-
+21. wB1 wL
+22. bS1 bM/
+23. wB2 -wM
+24. bS1 \wP
+25. wB2 wM
+26. bB2 wQ-
+27. wB1 bL
+28. bB2 wP
+29. wB2 bQ
+30. bM wB1\
+31. wA2 /bA1
+32. bA2 -wA2
+33. wA1 -bM
+34. bP \bA2
+35. wA3 bA2\
+36. bA1 -wL

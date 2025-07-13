@@ -1,0 +1,50 @@
+[GameType "Base"]
+[Date "2024.04.01"]
+[Event ""]
+[Site "boardspace.net"]
+[Round ""]
+[White "Dumbot"]
+[Black "Eelyr"]
+[Result "1-0"]
+
+1. wB1
+2. bA1 wB1\
+3. wB2 wB1/
+4. bQ bA1-
+5. wS1 wB2/
+6. bB1 /bA1
+7. wQ wS1-
+8. bG1 bQ-
+9. wS2 /wQ
+10. bS1 /bQ
+11. wS2 bG1/
+12. bB1 bA1
+13. wA1 /wQ
+14. bS1 -wB1
+15. wA1 /bS1
+16. bB1 wB1
+17. wG1 wS2/
+18. bB1 wB2
+19. wG1 bQ\
+20. bB1 wS1
+21. wG2 wQ-
+22. bB1 wQ
+23. wA2 \wS1
+24. bA2 /bA1
+25. wA2 /bA2
+26. bG2 \bS1
+27. wG3 \wB2
+28. bG2 /wB1
+29. wA1 -bS1
+30. bG2 wS1/
+31. wG3 \bQ
+32. bG3 \bG2
+33. wA3 -wA2
+34. bG3 \wS2
+35. wS1 \bS1
+36. bA3 -bG2
+37. wS1 -bA3
+38. bB2 bG2/
+39. wA3 /bQ
+40. bB2 \wG2
+41. wG2 bQ/

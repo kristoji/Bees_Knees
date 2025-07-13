@@ -1,0 +1,104 @@
+[GameType "Base+MLP"]
+[Date "2024.03.31"]
+[Event ""]
+[Site "boardspace.net"]
+[Round ""]
+[White "Myrmigi"]
+[Black "pcapella"]
+[Result "1-0"]
+
+1. wL
+2. bL /wL
+3. wQ wL-
+4. bQ -bL
+5. wA1 \wL
+6. bA1 bL\
+7. wM \wQ
+8. bM bQ\
+9. wP wQ-
+10. bP /bQ
+11. wA2 wP/
+12. bM \wA2
+13. wM /bA1
+14. bA2 -bP
+15. wA1 -bA2
+16. bA3 /bP
+17. wG1 wP-
+18. bS1 -bQ
+19. wS1 \wL
+20. bS1 -wS1
+21. wA3 \wQ
+22. bA3 wM\
+23. wG1 bQ/
+24. bB1 -bQ
+25. wA3 bA3\
+26. bB1 bQ
+27. wG1 bA1\
+28. bB1 bL
+29. wM \wQ
+30. bB2 bQ\
+31. wB1 /wA1
+32. bS2 /bP
+33. wB1 wA1
+34. bB2 bB1
+35. wB1 bA2
+36. bS2 -wA1
+37. wB1 bP
+38. bB2 wL
+39. wM bB2
+40. bB1 wM
+41. wG2 wB1\
+42. bG1 -bM
+43. wG3 wP-
+44. bG1 wA2/
+45. wG3 \bM
+46. bG2 -bS1
+47. wG2 -bQ
+48. bG2 \wQ
+49. wB2 wB1\
+50. bG2 wB1-
+51. wB1 bQ
+52. bG2 /wB2
+53. wS2 wQ\
+54. bG3 -bS1
+55. wS2 /bM
+56. bG1 \wS2
+57. wA2 /bP
+58. bM /wQ
+59. wB2 bP
+60. bM /wA3
+61. wG2 bG2/
+62. bM wA3\
+63. wB1 bL
+64. bM /wA3
+65. wA2 \bQ
+66. bS1 -bG3
+67. wG3 /bG1
+68. bS1 wA1/
+69. wG3 bQ\
+70. bM wA3\
+71. wS1 \bG1
+72. bS1 -bG3
+73. wP wQ\
+74. bS1 wA2/
+75. wP bB1\
+76. bS1 -bG3
+77. wS1 wS2-
+78. bS1 wA1/
+79. wS1 bA1-
+80. bS1 -bS2
+81. wS1 wQ\
+82. bS1 wA1\
+83. wS1 bA1-
+84. bS1 /bG2
+85. wS1 wS2-
+86. bS1 -wA3
+87. wP bA1-
+88. bS1 bM\
+89. wS1 wP-
+90. bS1 wG1\
+91. wS1 bS1/
+92. bA3 wS1-
+93. wG1 bQ/
+94. bA3 wQ-
+95. wB2 -bQ

@@ -1,0 +1,40 @@
+[GameType "Base+MLP"]
+[Date "2024.04.02"]
+[Event ""]
+[Site "boardspace.net"]
+[Round ""]
+[White "Frarlie"]
+[Black "Apetrovich"]
+[Result "0-1"]
+
+1. wL
+2. bL wL-
+3. wA1 /wL
+4. bA1 bL-
+5. wP -wL
+6. bQ bL/
+7. wQ /wP
+8. bA1 /wQ
+9. wA2 \wL
+10. bP bQ-
+11. wA2 \bQ
+12. bA2 bP\
+13. wA1 /bA2
+14. bM bP-
+15. wG1 wQ-
+16. bB1 -bA1
+17. wB1 \wQ
+18. bB1 bA1
+19. wM \wL
+20. bA3 bB1\
+21. wA2 bA3-
+22. bM \wB1
+23. wM bM-
+24. bM wB1
+25. wA3 wA1\
+26. bB1 wQ
+27. wB2 \wL
+28. bS1 /bM
+29. wG1 -bQ
+30. bL /wL
+31. wL /bL

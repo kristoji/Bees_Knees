@@ -1,0 +1,74 @@
+[GameType "Base"]
+[Date "2024.03.31"]
+[Event ""]
+[Site "boardspace.net"]
+[Round ""]
+[White "guest"]
+[Black "Dumbot"]
+[Result "error parsing result"]
+
+1. wS1
+2. bS1 /wS1
+3. wG1 wS1/
+4. bA1 -bS1
+5. wQ wG1\
+6. bB1 -bA1
+7. wA1 \wS1
+8. bQ bS1\
+9. wA1 bQ\
+10. bS2 \bA1
+11. wB1 wA1-
+12. bS2 \wG1
+13. wB1 wA1
+14. bB2 -bQ
+15. wB2 wB1-
+16. bB2 bS1
+17. wB2 bQ-
+18. bA2 /bA1
+19. wB1 bQ
+20. bB2 wB1
+21. wB2 bB2
+22. bA2 wQ\
+23. wS2 -wA1
+24. bA3 /bA1
+25. wG2 /wA1
+26. bA3 wG2\
+27. wS2 /bB1
+28. bG1 bA2\
+29. wG3 \wG2
+30. bG2 \bB1
+31. wA2 -wG2
+32. bG3 -bS2
+33. wA2 /bS1
+34. bG2 -wA2
+35. wG3 -bA2
+36. bA1 wQ/
+37. wS1 bB1/
+38. bA3 -wG2
+39. wS2 -bA3
+40. bA1 wG2\
+41. wB2 bS1
+42. bG3 wG1/
+43. wS2 /bA1
+44. bS2 \wB2
+45. wS1 -bG2
+46. bB1 wS1
+47. wS2 -bA3
+48. bG1 \wG1
+49. wS2 /bA1
+50. bA3 \wS2
+51. wB2 bB2
+52. bA1 -wG2
+53. wS2 -bA1
+54. bS2 -bG1
+55. wB2 bS1
+56. bS2 bG3/
+57. wS2 bA3\
+58. bS2 wQ-
+59. wB2 bB2
+60. bA1 /wA2
+61. wB2 bS1
+62. bA1 -wG1
+63. wB2 bB2
+64. bA1 /wA2
+65. wB2 bS1

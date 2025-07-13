@@ -1,0 +1,65 @@
+[GameType "Base+MLP"]
+[Date "2024.03.31"]
+[Event ""]
+[Site "boardspace.net"]
+[Round ""]
+[White "InDusDus"]
+[Black "Frasco92"]
+[Result "1-0"]
+
+1. wL
+2. bL wL-
+3. wM -wL
+4. bM bL-
+5. wA1 -wM
+6. bP /bM
+7. wQ \wL
+8. bQ \bM
+9. wP -wQ
+10. bA1 bM\
+11. wA2 -wP
+12. bA1 /wA1
+13. wA3 \wP
+14. bA2 bM\
+15. wA3 bA2-
+16. bG1 bQ-
+17. wS1 wA3/
+18. bM /wL
+19. wS1 bA2\
+20. bB1 bQ\
+21. wA2 \bQ
+22. bB1 bL
+23. wA3 bG1-
+24. bB2 bQ\
+25. wM -bQ
+26. bB2 bG1
+27. wM bB1
+28. bB2 wA3
+29. wB1 wA2/
+30. bA1 wB1-
+31. wB2 wQ/
+32. bG2 bB2-
+33. wB2 wA2
+34. bA3 /bB2
+35. wB2 bQ
+36. bA3 wQ/
+37. wA1 bA1/
+38. bS1 /bB2
+39. wB2 bG1
+40. bP -wS1
+41. wG1 wS1\
+42. bB2 wB2
+43. wP -bA3
+44. bP wM\
+45. wQ \bA3
+46. bS1 wG1-
+47. wG2 \wB1
+48. bB2 wB1\
+49. wP /bA3
+50. bS2 bM\
+51. wG3 \wQ
+52. bS2 -wS1
+53. wG3 -bQ
+54. bB2 wB2
+55. wG2 bQ/
+56. bM wM-

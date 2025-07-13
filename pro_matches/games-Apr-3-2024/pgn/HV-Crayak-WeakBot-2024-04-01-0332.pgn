@@ -1,0 +1,36 @@
+[GameType "Base+L"]
+[Date "2024.04.01"]
+[Event ""]
+[Site "boardspace.net"]
+[Round ""]
+[White "Crayak"]
+[Black "WeakBot"]
+[Result "1-0"]
+
+1. wS1
+2. bG1 /wS1
+3. wG1 wS1/
+4. bQ -bG1
+5. wQ \wS1
+6. bG2 /bQ
+7. wA1 wG1\
+8. bG2 /wQ
+9. wQ \bG2
+10. bG1 \wQ
+11. wA1 /bQ
+12. bS1 bG1/
+13. wG1 bQ-
+14. bS2 -bG1
+15. wB1 -wA1
+16. bB1 \bG1
+17. wB1 wA1
+18. bA1 \bB1
+19. wB1 bQ
+20. bA1 /wQ
+21. wL /wG1
+22. bA1 wQ-
+23. wA2 \wA1
+24. bG2 /wA1
+25. wB2 /wQ
+26. bA1 -wA2
+27. wG2 wQ\

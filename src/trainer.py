@@ -10,7 +10,7 @@ import numpy as np
 import os
 from datetime import datetime
 import time
-from match_generator import generate_matches
+from gen_dataset.match_generator import generate_matches
 
     
 

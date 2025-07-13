@@ -1,0 +1,83 @@
+[GameType "Base+MLP"]
+[Date "2024.04.01"]
+[Event ""]
+[Site "boardspace.net"]
+[Round ""]
+[White "antoinelr"]
+[Black "shturik"]
+[Result "0-1"]
+
+1. wL
+2. bP /wL
+3. wM wL/
+4. bM /bP
+5. wA1 wM\
+6. bQ bP\
+7. wQ wM-
+8. bA1 \bM
+9. wA2 \wL
+10. bA1 wQ/
+11. wA2 bA1/
+12. bA2 \bM
+13. wS1 \wL
+14. bM wA1\
+15. wS1 -bA2
+16. bB1 bM-
+17. wM bB1-
+18. bA3 -bQ
+19. wM bB1
+20. bA3 -wQ
+21. wA3 wM-
+22. bL \bA3
+23. wA3 \bL
+24. bG1 -bQ
+25. wS2 wM\
+26. bG1 -wL
+27. wP wM/
+28. bG1 wQ\
+29. wM bM
+30. bG1 wS2\
+31. wP \bB1
+32. bS1 bG1\
+33. wB1 wA2-
+34. bS1 wM\
+35. wP bB1/
+36. bG1 wQ\
+37. bB1 wP\
+38. bB2 -bQ
+39. bG1 wP-
+40. bB2 bP
+41. wP \bG1
+42. bB2 wL
+43. wB1 wA2
+44. bG2 \bP
+45. wB1 bA1
+46. bG2 wQ\
+47. wA2 /bQ
+48. bS2 \bP
+49. wA2 \bS2
+50. bQ /bP
+51. wG1 wB1/
+52. bP bQ-
+53. wG2 -wA3
+54. bG3 bQ/
+55. wB1 wQ
+56. bG3 \wB1
+57. wM bP/
+58. bB2 wM
+59. wL bQ\
+60. bG3 \wS2
+61. wB2 /wL
+62. bM -wP
+63. bG1 \wP
+64. bM wB1
+65. wB2 wL
+66. bB2 wA1
+67. wS2 bP-
+68. bG2 \bM
+69. wP bG1-
+70. bB1 bG3
+71. wA2 bP\
+72. bB1 bM\
+73. wG3 \wS1
+74. bM /bG1
