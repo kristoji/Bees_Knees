@@ -4,69 +4,17 @@ import os
 import time
 from tqdm import tqdm
 
-# class NpzDataset(Dataset):
-#     def __init__(self, folder_path: str, max_wins: int = 15, max_percent_draws: float = 0.2):
-#         """
-#         max_percent_draws: float = 0.2
-#         This parameter limits the number of draw files to a percentage of the total wins.
-#         If there are 100 win files and max_percent_draws is 0.2, it will only load 20 draw files.
-#         """
-#         self.folder_path = folder_path
-#         self.file_indices = []
-
-#         self.data_cache = {}  # cache for npz data already loaded and converted
-
-#         self.draws_path = os.path.join(folder_path, "draws")
-#         self.wins_path = os.path.join(folder_path, "wins")
-#         self.files_wins = [f for f in os.listdir(self.wins_path) if f.endswith(".npz")]
-#         self.files_wins = self.files_wins[:max_wins]  # Limit the number of win files
-#         self.files_draws = [f for f in os.listdir(self.draws_path) if f.endswith(".npz")]
-
-#         # max_draws = int(len(self.files_wins) * max_percent_draws)
-#         max_draws = round(len(self.files_wins) * max_percent_draws)
-#         self.files_draws = self.files_draws[:max_draws]
-#         self.files = self.files_wins + self.files_draws
-#         self.file_indices = []
-
-#         # Carica e converte in memoria tutti i dati una volta sola
-#         # for file_idx, file in enumerate(self.files):
-#         for file_idx, file in tqdm(enumerate(self.files), desc="Loading npz files", total=len(self.files)):
-#             if file_idx < len(self.files_wins):
-#                 file_path = os.path.join(self.wins_path, file)
-#             else:
-#                 file_path = os.path.join(self.draws_path, file)
-            
-#             npz_data = np.load(file_path)
-#             # Converte tutto in float32 subito
-#             in_mats = npz_data["in_mats"].astype(np.float32)
-#             out_mats = npz_data["out_mats"].astype(np.float32)
-#             values = npz_data["values"].astype(np.float32)
-
-#             self.data_cache[file_path] = {
-#                 "in_mats": in_mats,
-#                 "out_mats": out_mats,
-#                 "values": values
-#             }
-
-#             n_samples = len(in_mats)
-#             self.file_indices.extend([(file_idx, i) for i in range(n_samples)])
-
-#         print(f"Loaded {len(self.files_wins)} win files and {len(self.files_draws)} draw files.")
+from glob import glob
 
 class NpzDataset(Dataset):
     def __init__(
         self,
-        ts_folder: str,
-        iteration: int,
+        folder_path: str,
         max_wins: int = 15,
         max_percent_draws: float = 0.2
     ):
-        """
-        ts_folder: path to the timestamp directory, e.g. "data/2025-07-07_12-00-00"
-        iteration: which iteration subfolder to load, e.g. 0, 1, ...
-        """
         # build the iteration folder path
-        self.base_path = os.path.join(ts_folder, f"iteration_{iteration}")
+        self.base_path = folder_path
         self.data_cache = {}
         self.file_indices = []
 
@@ -145,3 +93,82 @@ class NpzDataset(Dataset):
 
 
         return x, y_policy, y_value
+
+
+
+class GraphDataset(Dataset):
+    def __init__(self, folder_path: str, max_wins: int = 15, max_percent_draws: float = 0.2):
+        # self.samples = []  # list of (json_path, txt_path)
+        # for d in dirs:
+        #     for path in glob(os.path.join(d, 'game_*.json')):
+        #         txt = path.replace('.json', '.txt')
+        #         if os.path.exists(txt):
+        #             self.samples.append((path, txt))
+        # self.samples.sort()
+
+        # build the iteration folder path
+        self.base_path = folder_path
+        self.data_cache = {}
+        self.file_indices = []
+
+        # helper to gather npz files under a win_or_draw folder
+        def gather_ext(root: str, ext: str):
+            files = []
+            if not os.path.isdir(root):
+                return files
+            for length in os.listdir(root):  # short, long, superlong
+                length_dir = os.path.join(root, length)
+                if not os.path.isdir(length_dir):
+                    continue
+                for fname in os.listdir(length_dir):
+                    if fname.endswith("." + ext):
+                        files.append(os.path.join(length_dir, fname))
+            return sorted(files)
+
+        # collect win files
+        wins_all = gather_ext(os.path.join(self.base_path, "wins"), "json")
+        self.files_wins = wins_all[:max_wins]
+
+        # collect draw files
+        draws_all = gather_ext(os.path.join(self.base_path, "draws"), "json")
+        max_draws = round(len(self.files_wins) * max_percent_draws)
+        self.files_draws = draws_all[:max_draws]
+
+        # final file list
+        self.files = self.files_wins + self.files_draws
+
+        # preload everything
+        for file_idx, file_path in tqdm(
+            enumerate(self.files),
+            total=len(self.files),
+            desc="Loading json files"
+        ):
+            
+
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        json_path, txt_path = self.samples[idx]
+        # load pi_list and value_list
+        with open(json_path, 'r') as f:
+            v_pi_list = json.load(f)  # [(pi_list, value), ...]
+        # final board state
+        data = parse_board_txt(txt_path)
+        num_nodes = data.num_nodes
+        # build move_adj and targets
+        pi_target = []
+        v_target = []
+        for pi_list, value in v_pi_list:
+            # build adjacency
+            M = build_move_adj(pi_list, num_nodes)
+            pi_probs = torch.tensor([p for _, p in pi_list], dtype=torch.float)
+            pi_target.append(pi_probs)
+            v_target.append(value)
+        # stack
+        move_adj = torch.stack(pi_target, dim=0)  # misuse: temporary placeholder
+        # Actually move_adj should be [num_moves_i, 2 indices]
+        pi_target = torch.cat(pi_target)
+        v_target = torch.tensor(v_target, dtype=torch.float)
+        return data, move_adj, pi_target, v_target

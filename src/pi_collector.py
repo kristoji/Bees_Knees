@@ -46,8 +46,33 @@ def parse_hive_game(file_path: str) -> list[str]:
 
     return moves
 
+def save_matrices(T_game, T_values, game, save_dir):
 
-def generate_matches(source_folder:str, verbose: bool = False, save_matrices: bool = True) -> None:
+    game_shape = (0, *Training.INPUT_SHAPE)
+    T_0 = np.empty(shape=game_shape, dtype=np.float32)
+    T_1 = np.empty(shape=game_shape, dtype=np.float32)
+    T_2 = np.array(T_values, dtype=np.float32)
+
+    for in_mat, out_mat in T_game:
+        T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+        T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+
+    assert T_0.shape[0] == T_1.shape[0] == T_2.shape[0], "Shapes of input matrices do not match"
+
+    # Create the subdirectories for saving
+    os.makedirs(save_dir, exist_ok=True)
+
+    log_subheader(f"Saving game {game} in {save_dir}/game_{game}.npz")
+        
+    # Save the training data for this game
+    np.savez_compressed(
+        f"{save_dir}/game_{game}.npz",
+        in_mats=T_0,
+        out_mats=T_1,
+        values=T_2,
+    )
+
+def generate_matches(source_folder:str, verbose: bool = False, want_matrices: bool = True) -> None:
 
     engine = Engine()
 
@@ -76,7 +101,7 @@ def generate_matches(source_folder:str, verbose: bool = False, save_matrices: bo
             pi = {move: 1.0 if move == s._parse_move(san)  else 0.0 for move in val_moves}
             pi_list.append([(s.stringify_move(move), prob) for move, prob in pi.items()])
 
-            if save_matrices:
+            if want_matrices:
                 mats = Training.get_matrices_from_board(s, pi)
                 T_game += mats
                 T_values += [value] * len(mats)
@@ -100,30 +125,10 @@ def generate_matches(source_folder:str, verbose: bool = False, save_matrices: bo
         with open(path, 'w') as f:
             json.dump(v_pi_list, f)
 
-        if save_matrices:
-            game_shape = (0, *Training.INPUT_SHAPE)
-            T_0 = np.empty(shape=game_shape, dtype=np.float32)
-            T_1 = np.empty(shape=game_shape, dtype=np.float32)
-            T_2 = np.array(T_values, dtype=np.float32)
-
-            for in_mat, out_mat in T_game:
-                T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
-                T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
-
-            assert T_0.shape[0] == T_1.shape[0] == T_2.shape[0], "Shapes of input matrices do not match"
-
-            # Create the subdirectories for saving
-            os.makedirs(save_dir, exist_ok=True)
-
-            log_subheader(f"Saving game {game} in {save_dir}/game_{game}.npz")
-                
-            # Save the training data for this game
-            np.savez_compressed(
-                f"{save_dir}/game_{game}.npz",
-                in_mats=T_0,
-                out_mats=T_1,
-                values=T_2,
-            )
+        if want_matrices:
+            save_matrices(T_game, T_values, game, save_dir)
+        if want_graphs:
+            save_graphs()
 
         log_subheader(f"Saving board state in {save_dir}/game_{game}_board.txt")
 
