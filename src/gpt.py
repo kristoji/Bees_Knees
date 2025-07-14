@@ -70,8 +70,8 @@ def board_to_graph(board: Board):
     valid_moves = board.get_valid_moves()
     # DEST POSITIONS
     positions = list(set([move.destination  for move in valid_moves if move.destination is not None]))
-    for p in positions:
-        print(f"Destination position: {p}")
+    # for p in positions:
+    #     print(f"Destination position: {p}")
     # Map each occupied position to an index
     pos_to_bug = board._pos_to_bug  # dict: Position -> list of Bug
     positions += list(pos_to_bug.keys())
@@ -139,7 +139,8 @@ def board_to_graph(board: Board):
 
             all_bugs[(bug.type, bug.color)] -= 1
             if all_bugs[(bug.type, bug.color)] < 0:
-                raise ValueError(f"Bug {bug} appears more times than expected in the board state.")
+                print(f"Bug {bug.color},{bug.type} appears more times than expected in the board state.")
+                raise ValueError(f"NEGATIVE BUG COUNT!")
             
             pos_bug_to_index[(pos, bug)] = len(x)  # Map position and bug to index
             x.append(color_feat + insect_feat + [pinned, art_pos_feat])  #        
@@ -156,13 +157,16 @@ def board_to_graph(board: Board):
     # PLACING NOT PLAYED BUGS IN THE NODES SET
     for (bug_type, color), count in all_bugs.items():
         max_count = all_bugs_final[(bug_type, color)]
-        for i in range(count):
+        for i in range(max_count - count + 1, max_count + 1):
             color_feat = [0, 1] if color == PlayerColor.WHITE else [0, 0]
             insect_feat = [1 if bug_type == tp else 0 for tp in BugType]
             pinned = 0
             art_pos_feat = 0
             x.append(color_feat + insect_feat + [pinned, art_pos_feat])
-            pos_bug_to_index[(None, Bug(color, bug_type, max_count - i - 1))] = len(x) - 1  # Add dummy node for missing bugs
+            if max_count > 1: # for Bugs with multiple instances
+                pos_bug_to_index[(None, Bug(color, bug_type, i))] = len(x) - 1  # Add dummy node for missing bugs
+            else: # for Bugs with single instance
+                pos_bug_to_index[(None, Bug(color, bug_type))] = len(x) - 1  # Add dummy node for missing bugs
             # print(f"Adding dummy node for {color} {bug_type} {max_count - i - 1} at index {len(x) - 1}")
     # Build adjacency
     G = nx.Graph()
@@ -239,6 +243,8 @@ def board_move_to_indices(move: Move, pos_bug_to_index: dict[tuple[Position, Bug
     for key, value in pos_bug_to_index.items():
         print(f"Key:({key[0]}, {key[1]}), Value: {value}")
     print()
+
+    print(f"Searching for {move.origin} and {move.bug} in pos_bug_to_index")
 
     src_idx = pos_bug_to_index.get((move.origin, move.bug))
 
