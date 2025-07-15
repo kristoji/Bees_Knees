@@ -69,12 +69,11 @@ def board_to_graph(board: Board):
     """
     valid_moves = board.get_valid_moves()
     # DEST POSITIONS
-    positions = list(set([move.destination  for move in valid_moves if move.destination is not None]))
-    # for p in positions:
-    #     print(f"Destination position: {p}")
-    # Map each occupied position to an index
-    pos_to_bug = board._pos_to_bug  # dict: Position -> list of Bug
-    positions += list(pos_to_bug.keys())
+    positions = set(move.destination for move in valid_moves if move.destination is not None)
+    # Add occupied positions, avoiding duplicates
+    pos_to_bug = board._pos_to_bug
+    positions.update(pos_to_bug.keys())
+    positions = list(positions)
     pos_bug_to_index = {}
     i = 0
     for pos in positions:
@@ -239,16 +238,11 @@ def board_move_to_indices(move: Move, pos_bug_to_index: dict[tuple[Position, Bug
     Map move string (e.g. 'wB1 wG3/') to (src_idx, dst_idx).
     ATTENZIONE AL PILLBUG
     """
-    print()
-    for key, value in pos_bug_to_index.items():
-        print(f"Key:({key[0]}, {key[1]}), Value: {value}")
-    print()
-
-    print(f"Searching for {move.origin} and {move.bug} in pos_bug_to_index")
 
     src_idx = pos_bug_to_index.get((move.origin, move.bug))
 
     dst_idx = pos_bug_to_index.get((move.destination, None))
+
     return src_idx, dst_idx
 
 
@@ -288,6 +282,7 @@ def save_matrices(T_game, T_values, game, save_dir):
     for in_mat, out_mat in T_game:
         in_mats = np.append(in_mats, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
         out_mats = np.append(out_mats, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+    print(f"Game {game} matrices: {in_mats.shape}, {out_mats.shape}, {values.shape}")
     assert in_mats.shape[0] == out_mats.shape[0] == values.shape[0]
     os.makedirs(save_dir, exist_ok=True)
     log_subheader(f"Saving game {game} matrices")
