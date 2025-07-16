@@ -62,7 +62,7 @@ def parse_pgn(file_path: str) -> list[str]:
     return moves
 
 
-def board_to_graph(board: Board):
+def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict[tuple[Position, Bug], int]]:
     """
     Convert board object into node features x and adjacency list edge_index.
     Features per node: [player_color(2), insect_type(8), pinned(1), is_articulation(1)].
@@ -246,14 +246,16 @@ def board_move_to_indices(move: Move, pos_bug_to_index: dict[tuple[Position, Bug
     return src_idx, dst_idx
 
 
-def save_graph(move_idx, pi_entry: list[tuple[Move, float]], v, board, save_dir, game_id):
+def save_graph(move_idx: int, pi_entry: list[tuple[Move, float]], v: float, board: Board, save_dir: str, game_id: int):
     """
     Salva un JSON con grafo e target per la mossa corrente.
     """
+    # get the adjacency list 
     x, edge_index, pos_bug_to_index = board_to_graph(board)
     plot_and_save_graph(edge_index, save_path=os.path.join(save_dir, f"game_{game_id}_move_{move_idx}.png"))
+    
+    # get the move adjacency matrix
     N = len(x)
-    # Costruisci move_adj e pi_target
     move_adj = [[0] * N for _ in range(N)]
     pi_target = []
     for move, prob in pi_entry:
@@ -308,37 +310,35 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
         path_pgn = os.path.join(source_folder, fname)
         moves = parse_pgn(path_pgn)
         engine.newgame(["Base+MLP"])
-        T_game, T_values, pi_list, values = [], [], [], []
+        T_game, T_values = [], []
         graph_dir = os.path.join(base_dir, 'graphs')
+        value = 1.0
 
         for move_idx, san in enumerate(moves):
             # compute current policy and value
             val_moves = engine.board.get_valid_moves()
             pi = {m: 1.0 if m == engine.board._parse_move(san) else 0.0 for m in val_moves}
             pi_entry = [(m,p) for m, p in pi.items()]
-            # pi_entry = [(engine.board.stringify_move(m), p) for m, p in pi.items()]
-            # add value placeholder (will adjust after final outcome)
-            values.append(1.0)
 
             # save graph for this move
             if want_graphs:
-                save_graph(move_idx, pi_entry, values[-1], engine.board, graph_dir, game)
+                save_graph(move_idx, pi_entry, value, engine.board, graph_dir, game)
 
             # collect matrices
             if want_matrices:
                 mats = Training.get_matrices_from_board(engine.board, pi)
                 T_game += mats
-                T_values += [1.0 if m == engine.board._parse_move(san) else -1.0 for m in val_moves]
+                T_values += [value] * len(mats)
+            value *= -1.0
 
-            # play
             engine.play(san, verbose=verbose)
 
         # final outcome
         log_subheader(f"Game {game} finished")
         outcome = engine.board.state
         final_mult = 1.0 if outcome == GameState.WHITE_WINS else -1.0 if outcome == GameState.BLACK_WINS else 0.0
+        
         # adjust values and matrices
-        values = [v * final_mult for v in values]
         if want_matrices:
             T_values = [v * final_mult for v in T_values]
             save_matrices(T_game, T_values, game, base_dir)
