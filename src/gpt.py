@@ -75,12 +75,17 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
     positions.update(pos_to_bug.keys())
     positions = list(positions)
     pos_bug_to_index = {}
-    i = 0
-    for pos in positions:
-        bugs = board._bugs_from_pos(pos)
-        for bug in bugs:
-            pos_bug_to_index[(pos,bug)] = i
-            i += 1
+    # i = 0
+    # for pos in positions:
+    #     bugs = board._bugs_from_pos(pos)
+    #     for bug in bugs:
+    #         pos_bug_to_index[(pos,bug)] = i
+    #         i += 1
+    #     else:
+    #         pos_bug_to_index[(pos, None)] = i
+    #         i += 1
+    # print(positions)
+    # print(pos_bug_to_index)
 
     all_bugs = {
         (BugType.QUEEN_BEE, PlayerColor.WHITE) : 1,
@@ -132,7 +137,7 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
         # PLACING PLAYED BUGS IN THE NODES SET
         for i, bug in enumerate(bugs):
             color_feat = [0, 1] if bug.color == PlayerColor.WHITE else [0, 0]
-            insect_feat = [1 if bug.type == tp else 0 for tp in BugType] # ------------> Maybe we can use BugType enum directly
+            insect_feat = [1 if bug.type == tp else 0 for tp in BugType]
             pinned = 1 if i < len(bugs) - 1 else 0 # Not pinned if on top of stack
             art_pos_feat = 1 if i == 0 and art_pos else 0 # Only the bug at the bottom of the stack is an articulation point
 
@@ -144,15 +149,15 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
             pos_bug_to_index[(pos, bug)] = len(x)  # Map position and bug to index
             x.append(color_feat + insect_feat + [pinned, art_pos_feat])  #        
         # PLACING EMPTY NEIGHBOR CELLS IN THE NODES SET (destination of valid moves)
-        else:
+        if not bugs:  # If no bugs in this position
             # If no bugs, use empty features
             color_feat = [1, 0]
-            insect_feat = [0] * len(BugType) # ------------> Maybe we can use BugType enum directly
+            insect_feat = [0] * len(BugType)
             pinned = 0
             art_pos_feat = 0
             pos_bug_to_index[(pos, None)] = len(x)  # Map position to index
             x.append(color_feat + insect_feat + [pinned, art_pos_feat])  
-    
+
     # PLACING NOT PLAYED BUGS IN THE NODES SET
     for (bug_type, color), count in all_bugs.items():
         max_count = all_bugs_final[(bug_type, color)]
@@ -180,7 +185,7 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
         if pos is None: # for non placed bugs
             continue
 
-        for d in Direction:
+        for d in Direction.flat():
             npos = board._get_neighbor(pos, d)
             # =====================================================================
             # TO-THINK: should we consider only the last bug in the stack?
@@ -190,7 +195,26 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
             for bug_other in neighbors:
                 j = pos_bug_to_index.get((npos, bug_other))
                 if j is not None:
-                    G.add_edge(i, j)
+                    G.add_edge(i, j)    # by looping, both directions will be added (undirected graph)
+            j = pos_bug_to_index.get((npos, None))
+            if j is not None:
+                G.add_edge(i, j)
+
+        # add ABOVE and BELOW edges
+        bugs_stack = board._bugs_from_pos(pos)
+        if len(bugs_stack) > 1:
+            # If there are multiple bugs, connect the top bug to the one below it
+            for k in range(len(bugs_stack) - 1):
+                i = pos_bug_to_index[(pos, bugs_stack[k])]
+                j = pos_bug_to_index[(pos, bugs_stack[k + 1])]
+                G.add_edge(i, j)  # ABOVE
+                G.add_edge(j, i)  # BELOW
+            i = pos_bug_to_index[(pos, bugs_stack[-1])]
+            j = pos_bug_to_index[(pos, None)]  # Connect top bug to empty
+            if j is not None:
+                G.add_edge(i, j)
+                G.add_edge(j, i)
+            
 
     
 
@@ -201,36 +225,54 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
 
     return x, edge_index, pos_bug_to_index
 
-def plot_and_save_graph(edge_index, save_path="graph.png", figsize=(8,8), dpi=300):
+def plot_and_save_graph(edge_index: list[list[int]], pos_bug_to_index: dict[tuple[Position, Bug], int], save_path="graph.png", figsize=(8,8), dpi=300):
     """
-    Given edge_index = [ [u1,u2,...], [v1,v2,...] ], build a NetworkX graph,
-    draw it with a spring layout, and save it to `save_path`.
+    Draw the graph using node labels that reflect bug color (w/b) and type.
+
+    Parameters:
+    - edge_index: [2 x E] list of edges
+    - pos_bug_to_index: dict mapping (position, Bug or None) to node index
+    - save_path: path to save PNG
     """
-    # 1. Build the graph
+    # Build graph
     G = nx.Graph()
     edges = list(zip(edge_index[0], edge_index[1]))
     G.add_edges_from(edges)
 
-    # 2. Choose a layout
-    pos = nx.spring_layout(G)
+    # Reverse mapping: node index -> (pos, bug)
+    index_to_key = {idx: key for key, idx in pos_bug_to_index.items()}
 
-    # 3. Plot
+    # Generate labels for all nodes
+    labels = {}
+    for idx in G.nodes():
+        entry = index_to_key.get(idx)
+        if entry is None:
+            # No mapping (shouldn't usually happen), leave blank
+            labels[idx] = ''
+        else:
+            pos, bug = entry
+            if bug is None:
+                labels[idx] = ''
+            else:
+                color_letter = 'w' if bug.color == PlayerColor.WHITE else 'b'
+                # bug_letter = TYPE_TO_LETTER.get(bug.type, '?')
+                bug_letter = bug.type.value
+                labels[idx] = f"{color_letter}{bug_letter}"
+
+    # Layout
+    pos_layout = nx.spring_layout(G)
     plt.figure(figsize=figsize)
-    nx.draw(
-        G,
-        pos,
-        with_labels=True,            # show node indices
-        node_size=500,               # size of nodes
-        node_color="skyblue",        # fill color
-        edge_color="gray",           # edge color
-        font_size=10,
-    )
-    plt.axis('off')  # turn off axes
+    nx.draw_networkx_nodes(G, pos_layout, node_size=500, node_color="skyblue")
+    nx.draw_networkx_edges(G, pos_layout, edge_color="gray")
+    nx.draw_networkx_labels(G, pos_layout, labels, font_size=10)
+    plt.axis('off')
 
-    # 4. Save
+    # Save
     plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.close()
     print(f"Graph saved to {save_path}")
+
+
 
 
 def board_move_to_indices(move: Move, pos_bug_to_index: dict[tuple[Position, Bug], int]) -> tuple[int, int]:
@@ -250,10 +292,12 @@ def save_graph(move_idx: int, pi_entry: list[tuple[Move, float]], v: float, boar
     """
     Salva un JSON con grafo e target per la mossa corrente.
     """
+    if move_idx == 0: 
+        return
     # get the adjacency list 
     x, edge_index, pos_bug_to_index = board_to_graph(board)
-    plot_and_save_graph(edge_index, save_path=os.path.join(save_dir, f"game_{game_id}_move_{move_idx}.png"))
-    
+    # plot_and_save_graph(edge_index, save_path=os.path.join(save_dir, f"game_{game_id}_move_{move_idx}.png"))
+    plot_and_save_graph(edge_index, pos_bug_to_index, save_path=os.path.join(save_dir, f"game_{game_id}_move_{move_idx}.png"))
     # get the move adjacency matrix
     N = len(x)
     move_adj = [[0] * N for _ in range(N)]
