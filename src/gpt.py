@@ -68,25 +68,18 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
     Features per node: [player_color(2), insect_type(8), pinned(1), is_articulation(1)].
     """
     valid_moves = board.get_valid_moves()
-    # DEST POSITIONS
-    positions = set(move.destination for move in valid_moves if move.destination is not None)
-    # Add occupied positions, avoiding duplicates
-    pos_to_bug = board._pos_to_bug
-    positions.update(pos_to_bug.keys())
-    positions = list(positions)
-    pos_bug_to_index = {}
-    # i = 0
-    # for pos in positions:
-    #     bugs = board._bugs_from_pos(pos)
-    #     for bug in bugs:
-    #         pos_bug_to_index[(pos,bug)] = i
-    #         i += 1
-    #     else:
-    #         pos_bug_to_index[(pos, None)] = i
-    #         i += 1
-    # print(positions)
-    # print(pos_bug_to_index)
 
+    # ===================================== DESTINATIONS POSITIONS =====================================
+    dest_positions = list(set(move.destination for move in valid_moves if move.destination is not None))
+
+    # ===================================== BUGS POSITIONS =====================================
+    pos_to_bug = board._pos_to_bug
+    bugs_positions = list(pos_to_bug.keys())
+
+    # ===================================== DICT MAPPING NODE (pos,bug) TO INDEX =====================================
+    pos_bug_to_index = {}
+
+    # ===================================== ALL BUGS AND THEIR COUNT =====================================
     all_bugs = {
         (BugType.QUEEN_BEE, PlayerColor.WHITE) : 1,
         (BugType.SPIDER, PlayerColor.WHITE) : 2,
@@ -107,6 +100,7 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
         (BugType.PILLBUG, PlayerColor.BLACK) : 1,
     }
 
+    # ====================================== ALL BUGS FINAL COUNT =====================================
     all_bugs_final = {
         (BugType.QUEEN_BEE, PlayerColor.WHITE) : 1,
         (BugType.SPIDER, PlayerColor.WHITE) : 2,
@@ -128,9 +122,11 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
     }
 
 
-    # Build node features
+    # ===================================== NODES LIST =====================================
     x = []
-    for pos in positions:
+
+    # ===================================== EVERY PLACED BUG IS A NODE =====================================
+    for pos in bugs_positions:
         bugs = board._bugs_from_pos(pos)
         art_pos = 1 if pos in board._art_pos else 0
 
@@ -148,17 +144,23 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
             
             pos_bug_to_index[(pos, bug)] = len(x)  # Map position and bug to index
             x.append(color_feat + insect_feat + [pinned, art_pos_feat])  #        
-        # PLACING EMPTY NEIGHBOR CELLS IN THE NODES SET (destination of valid moves)
-        if not bugs:  # If no bugs in this position
-            # If no bugs, use empty features
-            color_feat = [1, 0]
-            insect_feat = [0] * len(BugType)
-            pinned = 0
-            art_pos_feat = 0
-            pos_bug_to_index[(pos, None)] = len(x)  # Map position to index
-            x.append(color_feat + insect_feat + [pinned, art_pos_feat])  
+    
+    # ===================================== EVERY DESTINATION IS AN EMPTY NODE =====================================
+    for pos in dest_positions:
+        #PLACING EMPTY NEIGHBOR CELLS IN THE NODES SET (destination of valid moves)
+        # ======= !!! NOTE !!! =======
+        # the following if is commented because we always want to have a free node on top of every bug for beetle movement
+        #   ---->   if not bugs:  # (If no bugs in this position) !!! INCORRECT !!!
+        # ============================
+        # If no bugs, use empty features
+        color_feat = [1, 0]
+        insect_feat = [0] * len(BugType)
+        pinned = 0
+        art_pos_feat = 0
+        pos_bug_to_index[(pos, None)] = len(x)  # Map position to index
+        x.append(color_feat + insect_feat + [pinned, art_pos_feat])
 
-    # PLACING NOT PLAYED BUGS IN THE NODES SET
+    # ===================================== EVERY NON PLACED BUG IS A NODE =====================================
     for (bug_type, color), count in all_bugs.items():
         max_count = all_bugs_final[(bug_type, color)]
         for i in range(max_count - count + 1, max_count + 1):
@@ -172,19 +174,23 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
             else: # for Bugs with single instance
                 pos_bug_to_index[(None, Bug(color, bug_type))] = len(x) - 1  # Add dummy node for missing bugs
             # print(f"Adding dummy node for {color} {bug_type} {max_count - i - 1} at index {len(x) - 1}")
-    # Build adjacency
+
+    # ===================================== BUILDING THE GRAPH =====================================
     G = nx.Graph()
     G.add_nodes_from(range(len(x)))  # Add nodes for each bug position
-    # =====================================================================
-    # TO-THINK: is it useful to assign labels to the edges of the graph?
-    # The label can refer the type of neighbor direction
-    # =====================================================================
+
+            # =====================================================================
+            # TO-THINK: is it useful to assign labels to the edges of the graph?
+            # The label can refer the type of neighbor direction
+            # =====================================================================
     
+    # ===================================== ADDING EDGES FOR NEIGHBORS NODES =====================================
     for (pos, bug), i in pos_bug_to_index.items():
 
         if pos is None: # for non placed bugs
             continue
 
+        # ------- FLAT DIRECTIONS -------
         for d in Direction.flat():
             npos = board._get_neighbor(pos, d)
             # =====================================================================
@@ -200,25 +206,23 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
             if j is not None:
                 G.add_edge(i, j)
 
-        # add ABOVE and BELOW edges
+        # ------- ABOVE AND BELOW DIRECTIONS -------
         bugs_stack = board._bugs_from_pos(pos)
-        if len(bugs_stack) > 1:
+        if len(bugs_stack) >= 1:
             # If there are multiple bugs, connect the top bug to the one below it
             for k in range(len(bugs_stack) - 1):
                 i = pos_bug_to_index[(pos, bugs_stack[k])]
                 j = pos_bug_to_index[(pos, bugs_stack[k + 1])]
                 G.add_edge(i, j)  # ABOVE
                 G.add_edge(j, i)  # BELOW
-            i = pos_bug_to_index[(pos, bugs_stack[-1])]
-            j = pos_bug_to_index[(pos, None)]  # Connect top bug to empty
-            if j is not None:
-                G.add_edge(i, j)
-                G.add_edge(j, i)
-            
+            if pos in dest_positions:  # If this position is a destination, connect the top bug to the empty cell above (a possible destination)
+                i = pos_bug_to_index[(pos, bugs_stack[-1])]
+                j = pos_bug_to_index[(pos, None)]  # Connect top bug to empty
+                if j is not None:
+                    G.add_edge(i, j)
+                    G.add_edge(j, i)
 
-    
-
-    # Convert G to edge_index list
+    # ===================================== Convert G to edge_index list =====================================
     row, col = zip(*G.edges()) if G.number_of_edges() > 0 else ([], [])
     # undirected: add both directions
     edge_index = [list(row) + list(col), list(col) + list(row)]
@@ -242,27 +246,34 @@ def plot_and_save_graph(edge_index: list[list[int]], pos_bug_to_index: dict[tupl
     # Reverse mapping: node index -> (pos, bug)
     index_to_key = {idx: key for key, idx in pos_bug_to_index.items()}
 
-    # Generate labels for all nodes
+    # Generate labels and colors for all nodes
     labels = {}
+    node_colors = []
     for idx in G.nodes():
         entry = index_to_key.get(idx)
         if entry is None:
-            # No mapping (shouldn't usually happen), leave blank
             labels[idx] = ''
+            node_colors.append("skyblue")
         else:
             pos, bug = entry
             if bug is None:
                 labels[idx] = ''
+                node_colors.append("skyblue")
             else:
                 color_letter = 'w' if bug.color == PlayerColor.WHITE else 'b'
-                # bug_letter = TYPE_TO_LETTER.get(bug.type, '?')
                 bug_letter = bug.type.value
                 labels[idx] = f"{color_letter}{bug_letter}"
+                if color_letter == 'w':
+                    node_colors.append("#FFFDD0")
+                elif color_letter == 'b':
+                    node_colors.append("grey")
+                else:
+                    node_colors.append("skyblue")
 
     # Layout
     pos_layout = nx.spring_layout(G)
     plt.figure(figsize=figsize)
-    nx.draw_networkx_nodes(G, pos_layout, node_size=500, node_color="skyblue")
+    nx.draw_networkx_nodes(G, pos_layout, node_size=500, node_color=node_colors)
     nx.draw_networkx_edges(G, pos_layout, edge_color="gray")
     nx.draw_networkx_labels(G, pos_layout, labels, font_size=10)
     plt.axis('off')
@@ -321,13 +332,22 @@ def save_graph(move_idx: int, pi_entry: list[tuple[Move, float]], v: float, boar
 
 
 def save_matrices(T_game, T_values, game, save_dir):
+
     game_shape = (0, *Training.INPUT_SHAPE)
     in_mats = np.empty(game_shape, dtype=np.float32)
     out_mats = np.empty(game_shape, dtype=np.float32)
     values = np.array(T_values, dtype=np.float32)
-    for in_mat, out_mat in T_game:
-        in_mats = np.append(in_mats, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
-        out_mats = np.append(out_mats, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+    for i, (in_mat, out_mat) in enumerate(T_game):
+        try:
+            in_mats = np.append(in_mats, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+            out_mats = np.append(out_mats, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+        except Exception as e:
+            print(f"Index: {i}/{len(T_game)}")
+    
+            print("\nout_mat")
+            print(out_mat)
+            exit()
+
     print(f"Game {game} matrices: {in_mats.shape}, {out_mats.shape}, {values.shape}")
     assert in_mats.shape[0] == out_mats.shape[0] == values.shape[0]
     os.makedirs(save_dir, exist_ok=True)
@@ -352,6 +372,7 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
     game = 1
     for fname in os.listdir(source_folder):
         path_pgn = os.path.join(source_folder, fname)
+        log_subheader(f"Parsing file {fname}")
         moves = parse_pgn(path_pgn)
         engine.newgame(["Base+MLP"])
         T_game, T_values = [], []
@@ -359,20 +380,23 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
         value = 1.0
 
         for move_idx, san in enumerate(moves):
-            # compute current policy and value
-            val_moves = engine.board.get_valid_moves()
-            pi = {m: 1.0 if m == engine.board._parse_move(san) else 0.0 for m in val_moves}
-            pi_entry = [(m,p) for m, p in pi.items()]
 
-            # save graph for this move
-            if want_graphs:
-                save_graph(move_idx, pi_entry, value, engine.board, graph_dir, game)
+            if san != 'pass':
+                # compute current policy and value
+                val_moves = engine.board.get_valid_moves()
+                pi = {m: 1.0 if m == engine.board._parse_move(san) else 0.0 for m in val_moves}
+                pi_entry = [(m,p) for m, p in pi.items()]
 
-            # collect matrices
-            if want_matrices:
-                mats = Training.get_matrices_from_board(engine.board, pi)
-                T_game += mats
-                T_values += [value] * len(mats)
+                # save graph for this move
+                if want_graphs:
+                    save_graph(move_idx, pi_entry, value, engine.board, graph_dir, game)
+
+                # collect matrices
+                if want_matrices:
+                    mats = Training.get_matrices_from_board(engine.board, pi)
+                    T_game += mats
+                    T_values += [value] * len(mats)
+
             value *= -1.0
 
             engine.play(san, verbose=verbose)
