@@ -62,10 +62,14 @@ def parse_pgn(file_path: str) -> list[str]:
     return moves
 
 
-def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict[tuple[Position, Bug], int]]:
+def board_to_graph(board: Board) -> tuple[list[list[float]], list[list[int]], dict[tuple[Position, Bug], int]]:
     """
-    Convert board object into node features x and adjacency list edge_index.
-    Features per node: [player_color(2), insect_type(8), pinned(1), is_articulation(1)].
+    Convert board object into node features x (using floats) and adjacency list edge_index.
+    Features per node: [player_color, insect_type, pinned, is_articulation] as floats:
+      - player_color: 1.0 for White, 0.5 for empty, 0.0 for Black
+      - insect_type: scaled float in [0,1], e.g. type_index / (num_types)
+      - pinned: float 1.0 or 0.0
+      - is_articulation: float 1.0 or 0.0
     """
     valid_moves = board.get_valid_moves()
 
@@ -78,6 +82,8 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
 
     # ===================================== DICT MAPPING NODE (pos,bug) TO INDEX =====================================
     pos_bug_to_index = {}
+
+    pos_height_to_bug: dict[tuple[Position, int], Bug] = {}
 
     # ===================================== ALL BUGS AND THEIR COUNT =====================================
     all_bugs = {
@@ -100,27 +106,13 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
         (BugType.PILLBUG, PlayerColor.BLACK) : 1,
     }
 
-    # ====================================== ALL BUGS FINAL COUNT =====================================
-    all_bugs_final = {
-        (BugType.QUEEN_BEE, PlayerColor.WHITE) : 1,
-        (BugType.SPIDER, PlayerColor.WHITE) : 2,
-        (BugType.BEETLE, PlayerColor.WHITE) : 2,
-        (BugType.GRASSHOPPER, PlayerColor.WHITE) : 3,
-        (BugType.SOLDIER_ANT, PlayerColor.WHITE) : 3,
-        (BugType.MOSQUITO, PlayerColor.WHITE) : 1,
-        (BugType.LADYBUG, PlayerColor.WHITE) : 1,
-        (BugType.PILLBUG, PlayerColor.WHITE) : 1,
+    # ====================================== CONST ALL BUGS COUNT =====================================
+    all_bugs_final = all_bugs.copy()
 
-        (BugType.QUEEN_BEE, PlayerColor.BLACK) : 1,
-        (BugType.SPIDER, PlayerColor.BLACK) : 2,
-        (BugType.BEETLE, PlayerColor.BLACK) : 2,
-        (BugType.GRASSHOPPER, PlayerColor.BLACK) : 3,
-        (BugType.SOLDIER_ANT, PlayerColor.BLACK) : 3,
-        (BugType.MOSQUITO, PlayerColor.BLACK) : 1,
-        (BugType.LADYBUG, PlayerColor.BLACK) : 1,
-        (BugType.PILLBUG, PlayerColor.BLACK) : 1,
-    }
-
+    # ====================================== TYPE TO INDEX =====================================
+    types = list(BugType)
+    type_to_index = {bug_type: (i + 1) for i, bug_type in enumerate(types)}
+    num_types = len(types) + 1  # +1 for empty node (no bug)
 
     # ===================================== NODES LIST =====================================
     x = []
@@ -131,20 +123,20 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
         art_pos = 1 if pos in board._art_pos else 0
 
         # PLACING PLAYED BUGS IN THE NODES SET
-        for i, bug in enumerate(bugs):
-            color_feat = [0, 1] if bug.color == PlayerColor.WHITE else [0, 0]
-            insect_feat = [1 if bug.type == tp else 0 for tp in BugType]
-            pinned = 1 if i < len(bugs) - 1 else 0 # Not pinned if on top of stack
-            art_pos_feat = 1 if i == 0 and art_pos else 0 # Only the bug at the bottom of the stack is an articulation point
+        for h, bug in enumerate(bugs):
+            color_feat = 1.0 if bug.color==PlayerColor.WHITE else 0.0
+            insect_feat = (type_to_index[bug.type]) / num_types  # Scale type index to [0,1], 0 is empty node
+            pinned = 1.0 if h < len(bugs)-1 else 0.0
+            art = 1.0 if h==0 and art_pos else 0.0
+            pos_bug_to_index[(pos, bug)] = len(x)  # Map position and bug to index
+            pos_height_to_bug[(pos, h)] = bug  # Map position and height to bug      
+            x.append([color_feat, insect_feat, pinned, art])
 
             all_bugs[(bug.type, bug.color)] -= 1
             if all_bugs[(bug.type, bug.color)] < 0:
                 print(f"Bug {bug.color},{bug.type} appears more times than expected in the board state.")
                 raise ValueError(f"NEGATIVE BUG COUNT!")
-            
-            pos_bug_to_index[(pos, bug)] = len(x)  # Map position and bug to index
-            x.append(color_feat + insect_feat + [pinned, art_pos_feat])  #        
-    
+                
     # ===================================== EVERY DESTINATION IS AN EMPTY NODE =====================================
     for pos in dest_positions:
         #PLACING EMPTY NEIGHBOR CELLS IN THE NODES SET (destination of valid moves)
@@ -153,26 +145,28 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
         #   ---->   if not bugs:  # (If no bugs in this position) !!! INCORRECT !!!
         # ============================
         # If no bugs, use empty features
-        color_feat = [1, 0]
-        insect_feat = [0] * len(BugType)
-        pinned = 0
-        art_pos_feat = 0
+        color_feat = 0.5
+        insect_feat = 0.0
+        pinned = 0.0
+        art_pos_feat = 0.0
         pos_bug_to_index[(pos, None)] = len(x)  # Map position to index
-        x.append(color_feat + insect_feat + [pinned, art_pos_feat])
+        x.append([color_feat, insect_feat, pinned, art_pos_feat])
+        height = len(board._bugs_from_pos(pos))  # Height of the stack at this position
+        pos_height_to_bug[(pos, height)] = None  # Map position and height to None (empty cell)
 
     # ===================================== EVERY NON PLACED BUG IS A NODE =====================================
     for (bug_type, color), count in all_bugs.items():
         max_count = all_bugs_final[(bug_type, color)]
         for i in range(max_count - count + 1, max_count + 1):
             color_feat = [0, 1] if color == PlayerColor.WHITE else [0, 0]
-            insect_feat = [1 if bug_type == tp else 0 for tp in BugType]
-            pinned = 0
-            art_pos_feat = 0
-            x.append(color_feat + insect_feat + [pinned, art_pos_feat])
+            insect_feat = (type_to_index[bug_type]) / num_types  # Scale type index to [0,1], 0 is empty node
+            pinned = 0.0
+            art_pos_feat = 0.0
             if max_count > 1: # for Bugs with multiple instances
-                pos_bug_to_index[(None, Bug(color, bug_type, i))] = len(x) - 1  # Add dummy node for missing bugs
+                pos_bug_to_index[(None, Bug(color, bug_type, i))] = len(x) # Add dummy node for missing bugs
             else: # for Bugs with single instance
-                pos_bug_to_index[(None, Bug(color, bug_type))] = len(x) - 1  # Add dummy node for missing bugs
+                pos_bug_to_index[(None, Bug(color, bug_type))] = len(x) # Add dummy node for missing bugs
+            x.append([color_feat, insect_feat, pinned, art_pos_feat])
             # print(f"Adding dummy node for {color} {bug_type} {max_count - i - 1} at index {len(x) - 1}")
 
     # ===================================== BUILDING THE GRAPH =====================================
@@ -185,42 +179,33 @@ def board_to_graph(board: Board) -> tuple[list[list[int]], list[list[int]], dict
             # =====================================================================
     
     # ===================================== ADDING EDGES FOR NEIGHBORS NODES =====================================
-    for (pos, bug), i in pos_bug_to_index.items():
-
-        if pos is None: # for non placed bugs
-            continue
-
-        # ------- FLAT DIRECTIONS -------
+    
+    # Map mapping to index for lookup
+    node_index = {key:i for i,key in enumerate(pos_height_to_bug)}
+    # Flat edges: same height across neighbors
+    for (pos, h), bug in pos_height_to_bug.items():
+        if pos is None: 
+            raise ValueError(f"Position {pos} is None, cannot add edges for non-placed bugs.")
+        i = node_index[(pos,h)]
         for d in Direction.flat():
-            npos = board._get_neighbor(pos, d)
-            # =====================================================================
-            # TO-THINK: should we consider only the last bug in the stack?
-            # [i.e] neighbor = pos_to_bug[npos][-1] if npos in pos_to_bug else []
-            # =====================================================================
-            neighbors = board._bugs_from_pos(npos)
-            for bug_other in neighbors:
-                j = pos_bug_to_index.get((npos, bug_other))
-                if j is not None:
-                    G.add_edge(i, j)    # by looping, both directions will be added (undirected graph)
-            j = pos_bug_to_index.get((npos, None))
+            npos = board._get_neighbor(pos,d)
+            j = node_index.get((npos,h))
             if j is not None:
-                G.add_edge(i, j)
-
-        # ------- ABOVE AND BELOW DIRECTIONS -------
-        bugs_stack = board._bugs_from_pos(pos)
-        if len(bugs_stack) >= 1:
-            # If there are multiple bugs, connect the top bug to the one below it
-            for k in range(len(bugs_stack) - 1):
-                i = pos_bug_to_index[(pos, bugs_stack[k])]
-                j = pos_bug_to_index[(pos, bugs_stack[k + 1])]
-                G.add_edge(i, j)  # ABOVE
-                G.add_edge(j, i)  # BELOW
-            if pos in dest_positions:  # If this position is a destination, connect the top bug to the empty cell above (a possible destination)
-                i = pos_bug_to_index[(pos, bugs_stack[-1])]
-                j = pos_bug_to_index[(pos, None)]  # Connect top bug to empty
-                if j is not None:
-                    G.add_edge(i, j)
-                    G.add_edge(j, i)
+                G.add_edge(i,j)
+    
+    # Above/below within same stack
+    for pos, bugs in pos_to_bug.items():
+        for below, above in zip(bugs[:-1], bugs[1:]):
+            i = pos_bug_to_index[(pos, below)]
+            j = pos_bug_to_index[(pos, above)]
+            G.add_edge(i, j)
+            G.add_edge(j, i)
+        
+        if pos in dest_positions and bugs and bugs[-1]:  # If this position is a destination, connect the top bug to the empty cell above (a possible destination)
+            top_bug = pos_bug_to_index[(pos, bugs[-1])]
+            empty_node = pos_bug_to_index[(pos, None)]  
+            G.add_edge(top_bug, empty_node)
+            G.add_edge(empty_node, top_bug)
 
     # ===================================== Convert G to edge_index list =====================================
     row, col = zip(*G.edges()) if G.number_of_edges() > 0 else ([], [])
