@@ -356,10 +356,22 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
 
     game = 1
     for fname in os.listdir(source_folder):
+
         path_pgn = os.path.join(source_folder, fname)
         log_subheader(f"Parsing file {fname}")
         moves = parse_pgn(path_pgn)
-        engine.newgame(["Base+MLP"])
+
+        # ---- TESTING GAME ----
+        try:
+            engine.newgame(["Base+MLP"], verbose=False)
+            for san in moves:
+                engine.play(san, verbose=False)
+        except Exception as e:
+            log_header(f"Skipping game {game} with file {fname} due to error: {e}")
+            continue
+
+        # ---- PLAYING GAME TO EXTRACT MATRICES ----
+        engine.newgame(["Base+MLP"], verbose=verbose)
         T_game, T_values = [], []
         graph_dir = os.path.join(base_dir, 'graphs')
         value = 1.0
