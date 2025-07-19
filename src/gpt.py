@@ -17,6 +17,7 @@ from engine.enums import Command, BugType, Direction
 VERBOSE = True
 PRO_MATCHES_FOLDER = "pro_matches/games-Apr-3-2024/pgn"
 GAME_TO_PARSE = 1000
+PLOTS = False
 
 
 def log_header(title: str, width: int = 60, char: str = '='):
@@ -292,8 +293,10 @@ def save_graph(move_idx: int, pi_entry: list[tuple[Move, float]], board: Board, 
         return
     # get the adjacency list 
     x, edge_index, pos_bug_to_index = board_to_graph(board)
-    # plot_and_save_graph(edge_index, save_path=os.path.join(save_dir, f"game_{game_id}_move_{move_idx}.png"))
-    plot_and_save_graph(edge_index, pos_bug_to_index, save_path=os.path.join(save_dir, f"move_{move_idx}.png"))
+
+    if PLOTS:
+        plot_and_save_graph(edge_index, pos_bug_to_index, save_path=os.path.join(save_dir, f"move_{move_idx}.png"))
+    
     # get the move adjacency matrix
     N = len(x)
     move_adj = [[0] * N for _ in range(N)]
@@ -344,7 +347,7 @@ def save_matrices(T_game, T_values, game, save_dir):
     )
 
 
-def generate_matches(source_folder: str, verbose: bool = False, want_matrices: bool = True, want_graphs: bool = True) -> None:
+def generate_matches(source_folder: str, verbose: bool = False, want_matrices: bool = False, want_graphs: bool = True) -> None:
     engine = Engine()
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     base_dir = f"data/pro_matches/{ts}/"
