@@ -396,6 +396,7 @@ class Board():
                             moves.update(self._get_ladybug_moves(bug, origin))
                         case BugType.PILLBUG:
                             moves.update(self._get_sliding_moves(bug, origin, 1))
+                            moves.update(self._get_pillbug_special_moves(origin))
                         case BugType.MOSQUITO:
                             pass
         return moves

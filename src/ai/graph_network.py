@@ -9,26 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch_geometric.data import Data, Batch
 from torch_geometric.nn import GCNConv, global_mean_pool
 
-
-def parse_board_txt(path_txt):
-    """
-    Stub: parse a textual board representation into a PyG Data object.
-    You need to implement the parser according to your board_txt format.
-    Returns: Data(x, edge_index)
-    """
-    # TODO: implement parsing of board final state
-    raise NotImplementedError
-
-
-def build_move_adj(pi_list, num_nodes):
-    """
-    Build a torch tensor N x N from pi_list: [(move_str, prob), ...]
-    You need to map move_str to (i,j) indices.
-    """
-    # TODO: implement mapping from move_str to node indices
-    move_adj = torch.zeros((num_nodes, num_nodes), dtype=torch.float)
-    return move_adj
-
+from ai.loader import GraphDataset
 
 class HiveGNN(nn.Module):
     def __init__(self, num_node_features, hidden_dim, num_layers):
@@ -108,15 +89,13 @@ def train_epoch(model, dataloader, optimizer, device, c_v: float = 0.5):
 
 
 def train_loop(model, dataset_paths, epochs, lr, device):
-    dataset = HiveDataset(dataset_paths)
+    dataset = GraphDataset(dataset_paths)
     dataloader = DataLoader(dataset, batch_size=4, shuffle=True, collate_fn=hive_collate)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     model.to(device)
     for epoch in range(1, epochs+1):
         loss = train_epoch(model, dataloader, optimizer, device)
         print(f"Epoch {epoch}/{epochs} - Loss: {loss:.4f}")
-        torch.save(model.state_dict(), f"hive_gnn_epoch{epoch}.pt")
-
-# Example usage
-# model = HiveGNN(num_node_features=12, hidden_dim=128, num_layers=3)
-# train_loop(model, ["data/2025-07-12_10-00-00/pro_matches/"], epochs=50, lr=1e-3, device=torch.device('cpu'))
+        # torch.save(model.state_dict(), f"hive_gnn_epoch{epoch}.pt")
+    # TODO: save on WandB
+    torch.save(model.state_dict(), "hive_gnn_final.pt")

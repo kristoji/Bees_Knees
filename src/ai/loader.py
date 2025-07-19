@@ -5,6 +5,7 @@ import time
 from tqdm import tqdm
 
 from glob import glob
+import json
 
 class NpzDataset(Dataset):
     def __init__(
@@ -97,78 +98,28 @@ class NpzDataset(Dataset):
 
 
 class GraphDataset(Dataset):
-    def __init__(self, folder_path: str, max_wins: int = 15, max_percent_draws: float = 0.2):
-        # self.samples = []  # list of (json_path, txt_path)
-        # for d in dirs:
-        #     for path in glob(os.path.join(d, 'game_*.json')):
-        #         txt = path.replace('.json', '.txt')
-        #         if os.path.exists(txt):
-        #             self.samples.append((path, txt))
-        # self.samples.sort()
+    def __init__(self, folder_path: str):
+        # folder_path is "data/pro_matches/ts/graphs/"
 
-        # build the iteration folder path
-        self.base_path = folder_path
-        self.data_cache = {}
-        self.file_indices = []
+        self.samples = []   # list of paths to json files
 
-        # helper to gather npz files under a win_or_draw folder
-        def gather_ext(root: str, ext: str):
-            files = []
-            if not os.path.isdir(root):
-                return files
-            for length in os.listdir(root):  # short, long, superlong
-                length_dir = os.path.join(root, length)
-                if not os.path.isdir(length_dir):
-                    continue
-                for fname in os.listdir(length_dir):
-                    if fname.endswith("." + ext):
-                        files.append(os.path.join(length_dir, fname))
-            return sorted(files)
-
-        # collect win files
-        wins_all = gather_ext(os.path.join(self.base_path, "wins"), "json")
-        self.files_wins = wins_all[:max_wins]
-
-        # collect draw files
-        draws_all = gather_ext(os.path.join(self.base_path, "draws"), "json")
-        max_draws = round(len(self.files_wins) * max_percent_draws)
-        self.files_draws = draws_all[:max_draws]
-
-        # final file list
-        self.files = self.files_wins + self.files_draws
-
-        # preload everything
-        for file_idx, file_path in tqdm(
-            enumerate(self.files),
-            total=len(self.files),
-            desc="Loading json files"
-        ):
-            
+        game_dirs = glob(os.path.join(folder_path, 'game_*'))
+        for d in game_dirs:
+            for move_path in glob(os.path.join(d, 'move_*.json')):
+                self.samples.append(move_path)
+        # self.samples.sort()       # ???
 
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        json_path, txt_path = self.samples[idx]
-        # load pi_list and value_list
+        json_path = self.samples[idx]
         with open(json_path, 'r') as f:
-            v_pi_list = json.load(f)  # [(pi_list, value), ...]
-        # final board state
-        data = parse_board_txt(txt_path)
-        num_nodes = data.num_nodes
-        # build move_adj and targets
-        pi_target = []
-        v_target = []
-        for pi_list, value in v_pi_list:
-            # build adjacency
-            M = build_move_adj(pi_list, num_nodes)
-            pi_probs = torch.tensor([p for _, p in pi_list], dtype=torch.float)
-            pi_target.append(pi_probs)
-            v_target.append(value)
-        # stack
-        move_adj = torch.stack(pi_target, dim=0)  # misuse: temporary placeholder
-        # Actually move_adj should be [num_moves_i, 2 indices]
-        pi_target = torch.cat(pi_target)
-        v_target = torch.tensor(v_target, dtype=torch.float)
-        return data, move_adj, pi_target, v_target
+            data = json.load(f)
+        x = torch.tensor(data['x'], dtype=torch.float)
+        edge_index = torch.tensor(data['edge_index'], dtype=torch.long).t().contiguous()
+        move_adj = torch.tensor(data['move_adj'], dtype=torch.float)
+        pi = torch.tensor(data['pi'], dtype=torch.float)
+        v = torch.tensor(data['v'], dtype=torch.float)
+        return Data(x=x, edge_index=edge_index), move_adj, pi, v

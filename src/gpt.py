@@ -284,7 +284,7 @@ def board_move_to_indices(move: Move, pos_bug_to_index: dict[tuple[Position, Bug
     return src_idx, dst_idx
 
 
-def save_graph(move_idx: int, pi_entry: list[tuple[Move, float]], v: float, board: Board, save_dir: str, game_id: int):
+def save_graph(move_idx: int, pi_entry: list[tuple[Move, float]], board: Board, save_dir: str):
     """
     Salva un JSON con grafo e target per la mossa corrente.
     """
@@ -293,7 +293,7 @@ def save_graph(move_idx: int, pi_entry: list[tuple[Move, float]], v: float, boar
     # get the adjacency list 
     x, edge_index, pos_bug_to_index = board_to_graph(board)
     # plot_and_save_graph(edge_index, save_path=os.path.join(save_dir, f"game_{game_id}_move_{move_idx}.png"))
-    plot_and_save_graph(edge_index, pos_bug_to_index, save_path=os.path.join(save_dir, f"game_{game_id}_move_{move_idx}.png"))
+    plot_and_save_graph(edge_index, pos_bug_to_index, save_path=os.path.join(save_dir, f"move_{move_idx}.png"))
     # get the move adjacency matrix
     N = len(x)
     move_adj = [[0] * N for _ in range(N)]
@@ -308,10 +308,9 @@ def save_graph(move_idx: int, pi_entry: list[tuple[Move, float]], v: float, boar
         'edge_index': edge_index,
         'move_adj': move_adj,
         'pi': pi_target,
-        'v': v
     }
     os.makedirs(save_dir, exist_ok=True)
-    path = os.path.join(save_dir, f"game_{game_id}_move_{move_idx}.json")
+    path = os.path.join(save_dir, f"move_{move_idx}.json")
     with open(path, 'w') as f:
         json.dump(graph_dict, f)
 
@@ -348,7 +347,7 @@ def save_matrices(T_game, T_values, game, save_dir):
 def generate_matches(source_folder: str, verbose: bool = False, want_matrices: bool = True, want_graphs: bool = True) -> None:
     engine = Engine()
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    base_dir = f"data/{ts}/pro_matches"
+    base_dir = f"data/pro_matches/{ts}/"
     os.makedirs(base_dir, exist_ok=True)
     graph_dir = os.path.join(base_dir, 'graphs')
     os.makedirs(graph_dir, exist_ok=True)
@@ -357,13 +356,16 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
     game = 1
     for fname in os.listdir(source_folder):
 
+        game_dir = os.path.join(graph_dir, f"game_{game}")
+        os.makedirs(game_dir, exist_ok=True)
+
         path_pgn = os.path.join(source_folder, fname)
         log_subheader(f"Parsing file {fname}")
         moves = parse_pgn(path_pgn)
 
         # ---- TESTING GAME ----
         try:
-            engine.newgame(["Base+MLP"], verbose=False)
+            engine.newgame(["Base+MLP"])
             for san in moves:
                 engine.play(san, verbose=False)
         except Exception as e:
@@ -371,10 +373,11 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
             continue
 
         # ---- PLAYING GAME TO EXTRACT MATRICES ----
-        engine.newgame(["Base+MLP"], verbose=verbose)
+        engine.newgame(["Base+MLP"])
         T_game, T_values = [], []
         graph_dir = os.path.join(base_dir, 'graphs')
         value = 1.0
+        v_values = []
 
         for move_idx, san in enumerate(moves):
 
@@ -386,13 +389,15 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
 
                 # save graph for this move
                 if want_graphs:
-                    save_graph(move_idx, pi_entry, value, engine.board, graph_dir, game)
+                    save_graph(move_idx, pi_entry, engine.board, game_dir)
 
                 # collect matrices
                 if want_matrices:
                     mats = Training.get_matrices_from_board(engine.board, pi)
                     T_game += mats
                     T_values += [value] * len(mats)
+
+                v_values.append(value)
 
             value *= -1.0
 
@@ -407,6 +412,19 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
         if want_matrices:
             T_values = [v * final_mult for v in T_values]
             save_matrices(T_game, T_values, game, base_dir)
+        if want_graphs:
+            v_values = [v * final_mult for v in v_values]
+            # for each json in game_dir, add the value
+            for json_file in os.listdir(game_dir):
+                if json_file.endswith('.json'):
+                    json_path = os.path.join(game_dir, json_file)
+                    with open(json_path, 'r') as f:
+                        graph_data = json.load(f)
+            #         # graph_data['v'] = v_values[int(json_file.split('_')[2].split('.')[0])]
+                    graph_data['v'] = v_values[int(json_file.split('_')[1].split('.')[0])]
+                    with open(json_path, 'w') as f:
+                        json.dump(graph_data, f)
+            
 
         # save final board state
         final_txt = os.path.join(base_dir, f"game_{game}_board.txt")
