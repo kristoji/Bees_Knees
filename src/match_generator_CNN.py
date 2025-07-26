@@ -11,7 +11,7 @@ from datetime import datetime
 # PARAMS
 N_GAMES = 500
 N_ROLLOUTS = 1000
-VERBOSE = True              # If True, prints the board state after each move
+VERBOSE = False              # If True, prints the board state after each move
 SHORT = 50
 LONG = 100
 SUPERLONG = 300
@@ -171,6 +171,7 @@ def generate_matches(f_theta: Oracle, iteration: int = 0, n_games: int = 500, n_
         winner = None
 
         num_moves = 0
+        value = 1.0
 
         while not winner and num_moves < SUPERLONG:
 
@@ -264,80 +265,86 @@ def collect_matches(source_folder: str, ts: str = "pro_matches", iteration: int 
     game = 1
     for fname in os.listdir(source_folder):
 
-        log_header(f"Game {game}", width=70)
-
-        path_pgn = os.path.join(source_folder, fname)
-        log_subheader(f"Parsing file {fname}")
-        moves = parse_pgn(path_pgn)
-
-         # ---- TESTING GAME ----
         try:
+
+            log_header(f"Game {game}", width=70)
+
+            path_pgn = os.path.join(source_folder, fname)
+            log_subheader(f"Parsing file {fname}")
+            moves = parse_pgn(path_pgn)
+
+            # ---- TESTING GAME ----
+            try:
+                engine.newgame(["Base+MLP"])
+                for san in moves:
+                    engine.play(san, verbose=False)
+            except Exception as e:
+                log_header(f"Skipping game {game} with file {fname} due to error: {e}")
+                continue
+            
+            # ---- PLAYING GAME TO EXTRACT MATRICES ----
             engine.newgame(["Base+MLP"])
+            T_game = []
+            v_values = []
+
+            s = engine.board
+            value = 1.0
+
             for san in moves:
-                engine.play(san, verbose=False)
-        except Exception as e:
-            log_header(f"Skipping game {game} with file {fname} due to error: {e}")
-            continue
+
+                if san != 'pass':
+
+                    val_moves = engine.board.get_valid_moves()
+                    pi = {m: 1.0 if m == engine.board._parse_move(san) else 0.0 for m in val_moves}
+
+                    mats = Training.get_matrices_from_board(s, pi)
+                    v_values += [value]*len(mats)
+                    T_game += mats
+
+                value *= -1.0
+
+                engine.play(san, verbose=verbose)
+
+            log_subheader(f"Game {game} finished with state {engine.board.state.name}")
+
+            final_value: float = 1.0 if engine.board.state == GameState.WHITE_WINS else -1.0 if engine.board.state == GameState.BLACK_WINS else 0.0
+
+            # -------------- 1st VERSION  --------------
+            game_shape = (0, *Training.INPUT_SHAPE)
+            T_0 = np.empty(shape=game_shape, dtype=np.float32)
+            T_1 = np.empty(shape=game_shape, dtype=np.float32)
+            T_2 = np.array(v_values, dtype=np.float32)
+            T_2 = T_2 * final_value # update the values using final_value
+
+            for in_mat, out_mat in T_game:
+                T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+                T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+
+            win_or_draw = "draws" if engine.board.state == GameState.DRAW else "wins"
+            short_or_long = "short" if len(moves) < SHORT else "long" if len(moves) < LONG else "superlong"
+
+            # Create the subdirectories for saving
+            save_dir = f"data/{ts}/iteration_{iteration}/{win_or_draw}/{short_or_long}"
+            os.makedirs(save_dir, exist_ok=True)
+
+            log_subheader(f"Saving game {game} in {save_dir}/game_{game}.npz")
+
+            # Save the training data for this game
+            np.savez_compressed(
+                f"{save_dir}/game_{game}.npz",
+                in_mats=T_0,
+                out_mats=T_1,
+                values=T_2,
+            )
+
+            log_subheader(f"Saving board state in {save_dir}/board_{game}.txt")
+
+            with open(f"{save_dir}/board_{game}.txt", "w") as f:
+                f.write(str(engine.board))
         
-        # ---- PLAYING GAME TO EXTRACT MATRICES ----
-        engine.newgame(["Base+MLP"])
-        T_game = []
-        v_values = []
-
-        s = engine.board
-        value = 1.0
-
-        for san in moves:
-
-            if san != 'pass':
-
-                val_moves = engine.board.get_valid_moves()
-                pi = {m: 1.0 if m == engine.board._parse_move(san) else 0.0 for m in val_moves}
-
-                mats = Training.get_matrices_from_board(s, pi)
-                v_values += [value]*len(mats)
-                T_game += mats
-
-            value *= -1.0
-
-            engine.play(san, verbose=verbose)
-
-        log_subheader(f"Game {game} finished with state {engine.board.state.name}")
-
-        final_value: float = 1.0 if engine.board.state == GameState.WHITE_WINS else -1.0 if engine.board.state == GameState.BLACK_WINS else 0.0
-
-        # -------------- 1st VERSION  --------------
-        game_shape = (0, *Training.INPUT_SHAPE)
-        T_0 = np.empty(shape=game_shape, dtype=np.float32)
-        T_1 = np.empty(shape=game_shape, dtype=np.float32)
-        T_2 = np.array(v_values, dtype=np.float32)
-        T_2 = T_2 * final_value # update the values using final_value
-
-        for in_mat, out_mat in T_game:
-            T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
-            T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
-
-        win_or_draw = "draws" if engine.board.state == GameState.DRAW else "wins"
-        short_or_long = "short" if len(moves) < SHORT else "long" if len(moves) < LONG else "superlong"
-
-        # Create the subdirectories for saving
-        save_dir = f"data/{ts}/iteration_{iteration}/{win_or_draw}/{short_or_long}"
-        os.makedirs(save_dir, exist_ok=True)
-
-        log_subheader(f"Saving game {game} in {save_dir}/game_{game}.npz")
-
-        # Save the training data for this game
-        np.savez_compressed(
-            f"{save_dir}/game_{game}.npz",
-            in_mats=T_0,
-            out_mats=T_1,
-            values=T_2,
-        )
-
-        log_subheader(f"Saving board state in {save_dir}/board_{game}.txt")
-
-        with open(f"{save_dir}/board_{game}.txt", "w") as f:
-            f.write(str(engine.board))
+        except Exception as e: # added beacuse of some weird games with high stack of pieces
+            log_header(f"Skipping game {game} with file {fname} due to error {e}")
+            continue
 
         game += 1
         
