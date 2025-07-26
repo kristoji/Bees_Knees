@@ -11,11 +11,12 @@ class NpzDataset(Dataset):
     def __init__(
         self,
         folder_path: str,
-        max_wins: int = 15,
+        max_wins: int = 50,
         max_percent_draws: float = 0.2
     ):
         # build the iteration folder path
         self.base_path = folder_path
+
         self.data_cache = {}
         self.file_indices = []
 
@@ -78,11 +79,11 @@ class NpzDataset(Dataset):
 
     def __getitem__(self, idx):
         file_idx, item_idx = self.file_indices[idx]
-        file = self.files[file_idx]
-        if file_idx < len(self.files_wins):
-            file_path = os.path.join(self.wins_path, file)
-        else:
-            file_path = os.path.join(self.draws_path, file)
+        file_path = self.files[file_idx]
+        # if file_idx < len(self.files_wins):
+        #     file_path = os.path.join(self.base_path, "wins", file_path)
+        # else:
+        #     file_path = os.path.join(self.base_path, "draws", file_path)
 
         data = self.data_cache[file_path]
 

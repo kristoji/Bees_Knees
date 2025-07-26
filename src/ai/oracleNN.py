@@ -25,7 +25,7 @@ class OracleNN(Oracle):
         self.network.train_network(
             ts=ts, 
             iteration=iteration,
-            num_epochs=10, 
+            num_epochs=15, 
             batch_size=32, 
             learning_rate=0.001,
             value_loss_weight=0.5 

@@ -11,9 +11,7 @@ import os
 from datetime import datetime
 import time
 from gen_dataset.match_generator import generate_matches
-
-    
-
+import re
 
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 if BASE_PATH[-3:] == "src":
@@ -114,7 +112,30 @@ def main():
     
     #f_theta = Oracle()
     f_theta: Oracle = OracleNN()  # Use the neural network version of the oracle
+
+    log_header("STARTING PRE-TRAINING")
+    
     f_theta.training(ts="pro_matches", iteration=0)  # Initial training
+
+    log_subheader("Pre-training completed")
+
+    # Ensure 'models' directory exists
+    os.makedirs("models", exist_ok=True)
+
+    # Find all files starting with 'pretrain_' in 'models' directory
+    pretrain_files = [f for f in os.listdir("models") if f.startswith("pretrain_") and f.endswith(".npz")]
+    max_num = -1
+    pattern = re.compile(r"pretrain_(\d+)\.pt")
+    for fname in pretrain_files:
+        match = pattern.match(fname)
+        if match:
+            num = int(match.group(1))
+            if num > max_num:
+                max_num = num
+    next_num = max_num + 1
+    f_theta.save(f"models/pretrain_{next_num}.pt")
+
+    exit()
 
     cons_unsuccess = 0
 
@@ -148,7 +169,7 @@ def main():
         
         if old_wins < new_wins:
             f_theta = f_theta_new.copy()
-            f_theta.save(f"models/{iteration}.npz")
+            f_theta.save(f"models/{iteration}.pt")
             cons_unsuccess = 0
         else:
             cons_unsuccess += 1
