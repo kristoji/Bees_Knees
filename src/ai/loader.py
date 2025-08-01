@@ -7,6 +7,137 @@ from tqdm import tqdm
 from glob import glob
 import json
 
+import torch.geometric
+
+class GraphDataset(Dataset):
+    def __init__(self, folder_path: str, max_cache_size: int = 1000):
+        self.samples = []
+        self.cache = {}
+        self.cache_order = []
+        self.max_cache_size = max_cache_size
+        
+        # Still collect file paths
+        game_dirs = glob(os.path.join(folder_path, 'game_*'))
+        for d in game_dirs:
+            for move_path in glob(os.path.join(d, 'move_*.json')):
+                self.samples.append(move_path)
+
+    def __getitem__(self, idx):
+        json_path = self.samples[idx]
+        
+        # Check cache first
+        if json_path not in self.cache:
+            self._load_to_cache(json_path)
+        
+        return self.cache[json_path]
+    
+    def _load_to_cache(self, json_path):
+        # LRU cache eviction
+        if len(self.cache) >= self.max_cache_size:
+            oldest = self.cache_order.pop(0)
+            del self.cache[oldest]
+        
+        # Load and cache
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+        
+        # Process once and store
+        processed_data = self._process_data(data)
+        self.cache[json_path] = processed_data
+        self.cache_order.append(json_path)
+    
+    def _process_data(self, data):
+        x = torch.tensor(data['x'], dtype=torch.float)
+        edge_index = torch.tensor(data['edge_index'], dtype=torch.long).t().contiguous()
+        v = torch.tensor(data.get('v', 0.0), dtype=torch.float)
+        
+        return torch.geometric.data.Data(x=x, edge_index=edge_index), v
+
+
+    def __len__(self):
+        return len(self.samples)
+
+        
+
+class ConvDataset(Dataset):
+    def __init__(
+        self,
+        folder_path: str,
+        max_wins: int = -1,
+        max_percent_draws: float = 0.2,
+        max_cache_size = 30
+    ):
+        self.base_path = folder_path
+        self.index = []
+        self.file_sample_counts = {}
+        self.cache = {}
+        self.cache_order = []
+        self.max_cache_size = max_cache_size
+
+        # helper to gather npz files under a win_or_draw folder
+        def gather_npz(root: str, max_files:int):
+            files = []
+            if not os.path.isdir(root):
+                return files
+            num_files = 0
+            for length in os.listdir(root):  # short, long, superlong
+                length_dir = os.path.join(root, length)
+                if not os.path.isdir(length_dir):
+                    continue
+                for fname in os.listdir(length_dir):
+                    if fname.endswith(".npz"):
+                        files.append(os.path.join(length_dir, fname))
+                        num_files += 1
+                        if num_files == max_files:
+                            return sorted(files)
+            return sorted(files)
+
+        # collect win files
+        self.files_wins = gather_npz(os.path.join(self.base_path, "wins"), max_files=max_wins)
+
+        # collect draw files
+        self.files_draws = gather_npz(os.path.join(self.base_path, "draws"), max_files=len(self.files_wins)*max_percent_draws)
+
+        self.files = self.files_wins + self.files_draws
+
+        for file in tqdm(self.files, total=len(self.files), desc="Scanning npz files"):
+            with np.load(file, mmap_mode='r') as data:
+                n_samples = data["in_mats"].shape[0]
+                self.file_sample_counts[file] = n_samples
+                for i in range(n_samples):
+                    self.index.append((file, i))
+        
+        print(
+            f"Scanned {len(self.files_wins)} win files "
+            f"and {len(self.files_draws)} draw files "
+            f"→ {len(self.index)} total samples."
+        )
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, idx):
+        file, inner_index = self.index[idx]
+
+        if file not in self.cache:
+            self._load_file(file)
+        
+        data = self.cache[file]
+        x = data["in_mats"][inner_index]
+        y_policy = data["out_mats"][inner_index]
+        y_value = data["values"][inner_index]
+
+        return x, y_policy, y_value
+
+    def _load_file(self, file:str):
+        if len(self.cache_order) >= self.max_cache_size:
+            old_file = self.cache_order.pop(0)
+            del self.cache[old_file]
+        
+        data = np.load(file, mmap_mode='r')
+        self.cache[file] = data
+        self.cache_order.append(file)
+
 class NpzDataset(Dataset):
     def __init__(
         self,
@@ -17,7 +148,7 @@ class NpzDataset(Dataset):
         # build the iteration folder path
         self.base_path = folder_path
 
-        self.data_cache = {}
+        self.data_cache = {} 
         self.file_indices = []
 
         # helper to gather npz files under a win_or_draw folder
@@ -108,7 +239,7 @@ class GraphDataset(Dataset):
         for d in game_dirs:
             for move_path in glob(os.path.join(d, 'move_*.json')):
                 self.samples.append(move_path)
-        # self.samples.sort()       # ???
+        # self.samples.sort()      # ???
 
 
     def __len__(self):

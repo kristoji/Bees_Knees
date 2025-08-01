@@ -14,10 +14,10 @@ from engine.game import Bug, PlayerColor, Move, Position
 from engine.enums import Command, BugType, Direction
 
 # PARAMS
-VERBOSE = True
+VERBOSE = False
 PRO_MATCHES_FOLDER = "pro_matches/games-Apr-3-2024/pgn"
 GAME_TO_PARSE = 1000
-PLOTS = False
+PLOTS = True
 
 
 def log_header(title: str, width: int = 60, char: str = '='):
@@ -70,6 +70,7 @@ def board_to_graph(board: Board) -> tuple[list[list[float]], list[list[int]], di
       - player_color: 1.0 for White, 0.5 for empty, 0.0 for Black
       - insect_type: scaled float in [0,1], e.g. type_index / (num_types)
       - pinned: float 1.0 or 0.0
+      - pinning: float 1.0 if the bug is above another bug, 0.0 otherwise
       - is_articulation: float 1.0 or 0.0
     """
     valid_moves = board.get_valid_moves()
@@ -128,10 +129,11 @@ def board_to_graph(board: Board) -> tuple[list[list[float]], list[list[int]], di
             color_feat = 1.0 if bug.color==PlayerColor.WHITE else 0.0
             insect_feat = (type_to_index[bug.type]) / num_types  # Scale type index to [0,1], 0 is empty node
             pinned = 1.0 if h < len(bugs)-1 else 0.0
+            pinning = 1.0 if h > 0 else 0.0  # If the bug is above another bug, it is pinned
             art = 1.0 if h==0 and art_pos else 0.0
             pos_bug_to_index[(pos, bug)] = len(x)  # Map position and bug to index
             pos_height_to_bug[(pos, h)] = bug  # Map position and height to bug      
-            x.append([color_feat, insect_feat, pinned, art])
+            x.append([color_feat, insect_feat, pinned, pinning, art])
 
             all_bugs[(bug.type, bug.color)] -= 1
             if all_bugs[(bug.type, bug.color)] < 0:
@@ -149,6 +151,8 @@ def board_to_graph(board: Board) -> tuple[list[list[float]], list[list[int]], di
         color_feat = 0.5
         insect_feat = 0.0
         pinned = 0.0
+        bugs = board._bugs_from_pos(pos)
+        pinning = 1.0 if len(bugs) > 1 else 0.0  # If there are bugs, the top bug is pinned
         art_pos_feat = 0.0
         pos_bug_to_index[(pos, None)] = len(x)  # Map position to index
         x.append([color_feat, insect_feat, pinned, art_pos_feat])
@@ -215,6 +219,123 @@ def board_to_graph(board: Board) -> tuple[list[list[float]], list[list[int]], di
 
     return x, edge_index, pos_bug_to_index
 
+def board_to_simple_honored_graph(board: Board) -> tuple[list[list[float]], list[list[int]], dict[tuple[Position, Bug], int]]:
+    """
+    Convert board object into node features x (using floats) and adjacency list edge_index.
+    Features per node: [player_color, insect_type, pinned, is_articulation] as floats:
+      - player_color: 1.0 for CURRENT_PLAYER, 0.5 for empty, 0.0 for OTHER_PLAYER
+      - insect_type: one-hot encoding of bug type, e.g. [0, 1, 0, 0, 0, 0, 0, 0] for Spider
+      - pinned: float 1.0 or 0.0
+      - pinning: float 1.0 if the bug is above another bug, 0.0 otherwise
+      - is_articulation: float 1.0 or 0.0
+    """
+    valid_moves = board.get_valid_moves()
+
+    # ===================================== DESTINATIONS POSITIONS =====================================
+    # not used
+
+    # ===================================== BUGS POSITIONS =====================================
+    pos_to_bug = board._pos_to_bug
+    bugs_positions = list(pos_to_bug.keys())
+
+    # ===================================== DICT MAPPING NODE (pos,bug) TO INDEX =====================================
+    pos_bug_to_index = {}
+
+    pos_height_to_bug: dict[tuple[Position, int], Bug] = {}
+
+    # ===================================== ALL BUGS AND THEIR COUNT =====================================
+    all_bugs = {
+        (BugType.QUEEN_BEE, PlayerColor.WHITE) : 1,
+        (BugType.SPIDER, PlayerColor.WHITE) : 2,
+        (BugType.BEETLE, PlayerColor.WHITE) : 2,
+        (BugType.GRASSHOPPER, PlayerColor.WHITE) : 3,
+        (BugType.SOLDIER_ANT, PlayerColor.WHITE) : 3,
+        (BugType.MOSQUITO, PlayerColor.WHITE) : 1,
+        (BugType.LADYBUG, PlayerColor.WHITE) : 1,
+        (BugType.PILLBUG, PlayerColor.WHITE) : 1,
+
+        (BugType.QUEEN_BEE, PlayerColor.BLACK) : 1,
+        (BugType.SPIDER, PlayerColor.BLACK) : 2,
+        (BugType.BEETLE, PlayerColor.BLACK) : 2,
+        (BugType.GRASSHOPPER, PlayerColor.BLACK) : 3,
+        (BugType.SOLDIER_ANT, PlayerColor.BLACK) : 3,
+        (BugType.MOSQUITO, PlayerColor.BLACK) : 1,
+        (BugType.LADYBUG, PlayerColor.BLACK) : 1,
+        (BugType.PILLBUG, PlayerColor.BLACK) : 1,
+    }
+
+    # ====================================== CONST ALL BUGS COUNT =====================================
+    all_bugs_final = all_bugs.copy()
+
+    # ====================================== TYPE TO INDEX =====================================
+    types = list(BugType)
+    type_to_index = {bug_type: (i + 1) for i, bug_type in enumerate(types)}
+    num_types = len(types) + 1  # +1 for empty node (no bug)
+
+    # ===================================== NODES LIST =====================================
+    x = []
+
+    # ===================================== EVERY PLACED BUG IS A NODE =====================================
+    for pos in bugs_positions:
+        bugs = board._bugs_from_pos(pos)
+        art_pos = 1 if pos in board._art_pos else 0
+
+        # PLACING PLAYED BUGS IN THE NODES SET
+        for h, bug in enumerate(bugs):
+            color_feat = 1.0 if bug.color==board.current_player_color else 0.0
+            insect_feat = [0] * num_types  # One-hot encoding of bug type
+            insect_feat[type_to_index[bug.type]] = 1.0  # Set the
+            pinned = 1.0 if h < len(bugs)-1 else 0.0
+            pinning = 1.0 if h > 0 else 0.0  # If the bug is above another bug, it is pinned
+            art = 1.0 if h==0 and art_pos else 0.0
+            pos_bug_to_index[(pos, bug)] = len(x)  # Map position and bug to index
+            pos_height_to_bug[(pos, h)] = bug  # Map position and height to bug      
+            x.append([color_feat, insect_feat, pinned, pinning, art])
+
+            all_bugs[(bug.type, bug.color)] -= 1
+            if all_bugs[(bug.type, bug.color)] < 0:
+                print(f"Bug {bug.color},{bug.type} appears more times than expected in the board state.")
+                raise ValueError(f"NEGATIVE BUG COUNT!")
+                
+    # ===================================== BUILDING THE GRAPH =====================================
+    G = nx.Graph()
+    G.add_nodes_from(range(len(x)))  # Add nodes for each bug position
+
+            # =====================================================================
+            # TO-THINK: is it useful to assign labels to the edges of the graph?
+            # The label can refer the type of neighbor direction
+            # =====================================================================
+    
+    # ===================================== ADDING EDGES FOR NEIGHBORS NODES =====================================
+    
+    # Map mapping to index for lookup
+    node_index = {key:i for i,key in enumerate(pos_height_to_bug)}
+    # Flat edges: same height across neighbors
+    for (pos, h), bug in pos_height_to_bug.items():
+        if pos is None: 
+            raise ValueError(f"Position {pos} is None, cannot add edges for non-placed bugs.")
+        i = node_index[(pos,h)]
+        for d in Direction.flat():
+            npos = board._get_neighbor(pos,d)
+            j = node_index.get((npos,h))
+            if j is not None:
+                G.add_edge(i,j)
+    
+    # Above/below within same stack
+    for pos, bugs in pos_to_bug.items():
+        for below, above in zip(bugs[:-1], bugs[1:]):
+            i = pos_bug_to_index[(pos, below)]
+            j = pos_bug_to_index[(pos, above)]
+            G.add_edge(i, j)
+            G.add_edge(j, i)
+
+    # ===================================== Convert G to edge_index list =====================================
+    row, col = zip(*G.edges()) if G.number_of_edges() > 0 else ([], [])
+    # undirected: add both directions
+    edge_index = [list(row) + list(col), list(col) + list(row)]
+
+    return x, edge_index, pos_bug_to_index
+
 def plot_and_save_graph(edge_index: list[list[int]], pos_bug_to_index: dict[tuple[Position, Bug], int], save_path="graph.png", figsize=(8,8), dpi=300):
     """
     Draw the graph using node labels that reflect bug color (w/b) and type.
@@ -226,6 +347,8 @@ def plot_and_save_graph(edge_index: list[list[int]], pos_bug_to_index: dict[tupl
     """
     # Build graph
     G = nx.Graph()
+    if not edge_index or len(edge_index) < 2 or len(edge_index[0]) == 0:
+        G.add_node(0)
     edges = list(zip(edge_index[0], edge_index[1]))
     G.add_edges_from(edges)
 
@@ -311,6 +434,30 @@ def save_graph(move_idx: int, pi_entry: list[tuple[Move, float]], board: Board, 
         'edge_index': edge_index,
         'move_adj': move_adj,
         'pi': pi_target,
+        'move_idx': move_idx,
+    }
+    os.makedirs(save_dir, exist_ok=True)
+    path = os.path.join(save_dir, f"move_{move_idx}.json")
+    with open(path, 'w') as f:
+        json.dump(graph_dict, f)
+
+def save_simple_honored_graph(move_idx: int, pi_entry: list[tuple[Move, float]], board: Board, save_dir: str):
+    """
+    Salva un JSON con grafo e target per la mossa corrente.
+    """
+    if move_idx == 0: 
+        return
+    # get the adjacency list 
+    #x, edge_index, pos_bug_to_index = board_to_graph(board)
+    x, edge_index, pos_bug_to_index = board_to_simple_honored_graph(board)
+
+
+    if PLOTS:
+        plot_and_save_graph(edge_index, pos_bug_to_index, save_path=os.path.join(save_dir, f"move_{move_idx}.png"))
+
+    graph_dict = {
+        'x': x,
+        'edge_index': edge_index,
     }
     os.makedirs(save_dir, exist_ok=True)
     path = os.path.join(save_dir, f"move_{move_idx}.json")
@@ -379,12 +526,14 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
         engine.newgame(["Base+MLP"])
         T_game, T_values = [], []
         graph_dir = os.path.join(base_dir, 'graphs')
-        value = 1.0
+        value = -1.0
         v_values = []
+        saved_turns = 0
 
         for move_idx, san in enumerate(moves):
 
             if san != 'pass':
+                saved_turns += 1
                 # compute current policy and value
                 val_moves = engine.board.get_valid_moves()
                 pi = {m: 1.0 if m == engine.board._parse_move(san) else 0.0 for m in val_moves}
@@ -392,7 +541,8 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
 
                 # save graph for this move
                 if want_graphs:
-                    save_graph(move_idx, pi_entry, engine.board, game_dir)
+                    #save_graph(move_idx, pi_entry, engine.board, game_dir)
+                    save_simple_honored_graph(saved_turns, pi_entry, engine.board, game_dir)
 
                 # collect matrices
                 if want_matrices:
@@ -405,6 +555,9 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
             value *= -1.0
 
             engine.play(san, verbose=verbose)
+
+        #log_subheader(f"Saved turns: {saved_turns} for game {game} with file {fname}")
+        #log_subheader(f"v values {len(v_values)}")
 
         # final outcome
         log_subheader(f"Game {game} finished")
@@ -424,7 +577,8 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
                     with open(json_path, 'r') as f:
                         graph_data = json.load(f)
             #         # graph_data['v'] = v_values[int(json_file.split('_')[2].split('.')[0])]
-                    graph_data['v'] = v_values[int(json_file.split('_')[1].split('.')[0])]
+                    #print(int(json_file.split('_')[1].split('.')[0])-1)
+                    graph_data['v'] = v_values[int(json_file.split('_')[1].split('.')[0])-1]
                     with open(json_path, 'w') as f:
                         json.dump(graph_data, f)
             

@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from typing import Tuple, List, Any # Aggiunto per i type hint
 from ai.training import Training
-from ai.loader import NpzDataset
+from ai.loader import NpzDataset,ConvDataset 
 from tqdm import tqdm
 import time
 
@@ -373,7 +373,8 @@ class NeuralNetwork(nn.Module):
         # train_dataset: TensorDataset = TensorDataset(states_tensor, policy_targets_tensor, value_targets_tensor)
         # train_dataloader: DataLoader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True if len(train_dataset) > batch_size else False)
 
-        dataset = NpzDataset(folder_path=f"data/{ts}/iteration_{iteration}")
+        dataset = ConvDataset(folder_path=f"data/{ts}/iteration_{iteration}")
+        #dataset = NpzDataset(folder_path=f"data/{ts}/iteration_{iteration}")
         train_dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
 
