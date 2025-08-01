@@ -6,7 +6,7 @@ from ai.graph_honored_network import GraphClassifier
 from ai.training import Training
 from ai.oracle import Oracle
 from ai.loader import GraphDataset
-    
+from gpt import board_to_simple_honored_graph
 
 class OracleGNN(Oracle):
     """
@@ -14,8 +14,8 @@ class OracleGNN(Oracle):
     """
     def __init__(self):
         self.network = GraphClassifier()
-        self.path = ""
-        self.train_loader =  GraphDataset(folder_path="DA METTERE") # ------------> DA METTERE co dataloader
+        self.path = "pro_matches/GNN_Apr-3-2024/graphs"
+        self.train_loader =  GraphDataset(folder_path=self.path) # ------------> DA METTERE co dataloader
 
     def training(self, ts: str, iteration: int) -> None:
         """
@@ -25,12 +25,8 @@ class OracleGNN(Oracle):
         if not self.network:
             raise ValueError("Neural network is not initialized.")
         self.network.train_network(
-            ts=ts, 
-            iteration=iteration,
-            num_epochs=15, 
-            batch_size=32, 
-            learning_rate=0.001,
-            value_loss_weight=0.5 
+            train_loader=self.train_loader,
+            epochs=15,
         )
 
     def save(self, path: str) -> None:
@@ -60,23 +56,40 @@ class OracleGNN(Oracle):
         """
         Predict the value and policy for the given board state.
         """
-        T = Training.get_in_mat_from_board(board)
-        T = np.array(T, dtype=np.float32).reshape((1, *Training.INPUT_SHAPE))
-        v, pi_mat = self.network.predict(T)
 
-        # print(pi_mat.shape) # (1, 109760)
+        # TODO : convert the board into a graph representation
+        x, edge_index, pos_bug_to_index = board_to_simple_honored_graph(board)
 
-        pi = Training.get_dict_from_matrix(pi_mat[0], board)
+        # Create PyTorch Geometric Data object
+        data = Data(
+            x=torch.tensor(x, dtype=torch.float32),
+            edge_index=torch.tensor(edge_index, dtype=torch.long).t().contiguous(),
+            batch=torch.zeros(len(x), dtype=torch.long)  # Single graph, all nodes in batch 0
+        )
+        
+        v = self.network.predict(data)
+
+        
         valid_moves = list(board.get_valid_moves())
-        # Filter pi to only include valid moves
-        pi = {move: prob for move, prob in pi.items() if move in valid_moves}
+        pi = {}
+        for m in valid_moves:
+            board.safe_play(m) # safe to optimize
+            x, edge_index, pos_bug_to_index = board_to_simple_honored_graph(board)
+            data = Data(
+                x=torch.tensor(x, dtype=torch.float32),
+                edge_index=torch.tensor(edge_index, dtype=torch.long).t().contiguous(),
+                batch=torch.zeros(len(x), dtype=torch.long)  # Single graph, all nodes in batch 0
+            )
+            pi[m] = self.network.predict(data)
+            board.undo(m)
+            
         # Softmax the probabilities
         if pi:
             probs = np.array(list(pi.values()))
             probs = np.exp(probs - np.max(probs))
             probs /= np.sum(probs)
             pi = {move: prob for move, prob in zip(pi.keys(), probs)}
-        # else:
-        #     raise ValueError("No valid moves found in the board state.")
+        else:
+            raise ValueError("No valid moves found in the board state.")
 
         return v, pi

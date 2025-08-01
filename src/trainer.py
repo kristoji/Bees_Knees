@@ -123,7 +123,7 @@ def main():
     os.makedirs("models", exist_ok=True)
 
     # Find all files starting with 'pretrain_' in 'models' directory
-    pretrain_files = [f for f in os.listdir("models") if f.startswith("pretrain_") and f.endswith(".npz")]
+    pretrain_files = [f for f in os.listdir("models") if f.startswith("pretrain_") and f.endswith(".pt")]
     max_num = -1
     pattern = re.compile(r"pretrain_(\d+)\.pt")
     for fname in pretrain_files:
