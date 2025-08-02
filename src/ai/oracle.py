@@ -9,7 +9,7 @@ class Oracle:
 
     def compute_heuristic(self, board: Board) -> float:
         "Compute a heuristic value for the board state in [0, 1], where 1 is a win for white and 0 is a win for black"
-        score_queen =  (6 - board.count_queen_neighbors(board.current_player_color) + board.count_queen_neighbors(board.other_player_color)) / 12.0
+        score_queen  =  (6 - board.count_queen_neighbors(board.current_player_color) + board.count_queen_neighbors(board.other_player_color)) / 12.0
         return score_queen
     
     def predict(self, board: Board) -> tuple[float, Dict[Move, float]]:

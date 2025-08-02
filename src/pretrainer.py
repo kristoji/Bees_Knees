@@ -1,7 +1,8 @@
 from engineer import Engine
 from ai.oracleGNN import OracleGNN
+from ai.oracleRND import OracleRND
 import os
-from trainer import reset_log, log_header, log_subheader
+from trainer import reset_log, log_header, log_subheader, duel
 import re
 
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -58,6 +59,19 @@ def main():
     next_num = max_num + 1
     log_subheader(f"Saving pre-trained model as 'pretrain_{next_num}.pt'")
     f_theta.save(f"models/pretrain_{next_num}.pt")
+
+    f_theta_test = OracleGNN()
+    f_theta_test.load(f"models/pretrain_{next_num}.pt")
+
+    f_theta_random = OracleRND()
+
+    duel(new_player=f_theta_test, 
+         old_player=f_theta_random, 
+         games=10)
+
+
+
+
         
 
 if "__main__" == __name__:
