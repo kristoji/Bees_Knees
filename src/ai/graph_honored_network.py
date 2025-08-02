@@ -1,9 +1,11 @@
 import pytorch_lightning as pl
 import torch.nn as nn
+import torch
 from torch.nn import Linear
-from torch_geometric.nn import global_mean_pool
+from torch_geometric.nn import global_mean_pool, MessagePassing
 from torch.utils.data import DataLoader
 from torch_geometric.utils import remove_self_loops
+from tqdm import tqdm
 
 
 class GIN_Conv(MessagePassing):
@@ -117,8 +119,18 @@ class GraphClassifier(pl.LightningModule):
 
     def training_step(self, batch):
         loss, acc = self.forward(batch, mode="train")
+        
+        # Zero gradients
+        self.configure_optimizers().zero_grad()
+        
+        # Backward pass
+        loss.backward()
+        
+        # Update weights
+        self.configure_optimizers().step()
+        
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        self.log('train_acc', acc, prog_bar=False )
+        self.log('train_acc', acc, prog_bar=False)
         return loss
 
     #def validation_step(self, batch, batch_idx):
@@ -130,14 +142,20 @@ class GraphClassifier(pl.LightningModule):
         self.log('test_acc', acc)
 
     def train_epoch(self, train_loader: DataLoader):
-        self.model.train()
-        for batch in train_loader:
-            print(f"Batch: {batch+1}/{len(train_loader)}")
-            self.training_step(batch)
+        loss = 0.0
+        for batch in tqdm(train_loader, desc="Batches", leave=False):
+            loss += self.training_step(batch)
+        return loss / len(train_loader)
+
     
-    def train_network(self, train_loader: DataLoader, val_loader: DataLoader, epochs: int = 10):
-        for epoch in range(epochs):
-            self.train_epoch(train_loader)
+    def train_network(self, train_loader: DataLoader, 
+                      #val_loader: DataLoader, 
+                      epochs: int = 10):
+        # Use tqdm for better progress tracking
+        optimizer = self.configure_optimizers()
+        self.model.train()
+        for epoch in tqdm(range(epochs), desc="Training", unit="epoch"):
+            ep_loss = self.train_epoch(train_loader)
             # Optionally validate after each epoch
             # self.validate(val_loader)
-            print(f'Epoch {epoch+1}/{epochs} completed.')
+            tqdm.write(f'Epoch {epoch+1}/{epochs} completed. Loss : {ep_loss:.4f}')

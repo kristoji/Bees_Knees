@@ -2,6 +2,8 @@ from engine.board import Board
 from engine.game import Move
 from typing import Dict
 import numpy as np
+import torch
+from torch_geometric.data import Data
 from ai.graph_honored_network import GraphClassifier
 from ai.training import Training
 from ai.oracle import Oracle
@@ -13,7 +15,7 @@ class OracleGNN(Oracle):
     Oracle that uses a neural network to predict the value and policy of a board state.
     """
     def __init__(self):
-        self.network = GraphClassifier()
+        self.network = GraphClassifier(in_dim=13, hidden_dim=64, num_classes=1)
         self.path = "pro_matches/GNN_Apr-3-2024/graphs"
         self.train_loader =  GraphDataset(folder_path=self.path) # ------------> DA METTERE co dataloader
 
@@ -26,7 +28,7 @@ class OracleGNN(Oracle):
             raise ValueError("Neural network is not initialized.")
         self.network.train_network(
             train_loader=self.train_loader,
-            epochs=15,
+            epochs=3,
         )
 
     def save(self, path: str) -> None:
@@ -64,10 +66,10 @@ class OracleGNN(Oracle):
         data = Data(
             x=torch.tensor(x, dtype=torch.float32),
             edge_index=torch.tensor(edge_index, dtype=torch.long).t().contiguous(),
-            batch=torch.zeros(len(x), dtype=torch.long)  # Single graph, all nodes in batch 0
-        )
+            batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph        
+            )
         
-        v = self.network.predict(data)
+        v = self.network.predict(data) # PREDICT THE STATE
 
         
         valid_moves = list(board.get_valid_moves())
@@ -78,9 +80,9 @@ class OracleGNN(Oracle):
             data = Data(
                 x=torch.tensor(x, dtype=torch.float32),
                 edge_index=torch.tensor(edge_index, dtype=torch.long).t().contiguous(),
-                batch=torch.zeros(len(x), dtype=torch.long)  # Single graph, all nodes in batch 0
-            )
-            pi[m] = self.network.predict(data)
+                batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph            
+                )
+            pi[m] = 1 - self.network.predict(data)
             board.undo(m)
             
         # Softmax the probabilities

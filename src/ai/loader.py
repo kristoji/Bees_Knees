@@ -7,7 +7,9 @@ from tqdm import tqdm
 from glob import glob
 import json
 
-import torch.geometric
+import torch
+from torch_geometric.data import Data
+
 
 class GraphDataset(Dataset):
     def __init__(self, folder_path: str, max_cache_size: int = 1000):
@@ -29,7 +31,13 @@ class GraphDataset(Dataset):
         if json_path not in self.cache:
             self._load_to_cache(json_path)
         
-        return self.cache[json_path]
+        data = self.cache[json_path]
+        # Skip None data (empty graphs)
+        if data is None:
+            # Return next valid sample or raise error
+            return self.__getitem__((idx + 1) % len(self.samples))
+        
+        return data
     
     def _load_to_cache(self, json_path):
         # LRU cache eviction
@@ -47,11 +55,29 @@ class GraphDataset(Dataset):
         self.cache_order.append(json_path)
     
     def _process_data(self, data):
-        x = torch.tensor(data['x'], dtype=torch.float)
-        edge_index = torch.tensor(data['edge_index'], dtype=torch.long).t().contiguous()
+        x = data['x']
+        temp = []
+        for el in x:
+            flattened = []
+            for sub_el in el:
+                if isinstance(sub_el, list):
+                    flattened.extend(sub_el)  # More efficient than iterating
+                else:
+                    flattened.append(sub_el)
+            temp.append(flattened)
+
+        # Skip empty graphs
+        if len(temp) == 0:
+            return None
+
+        x = torch.tensor(temp, dtype=torch.float)
+        edge_index = torch.tensor(data['edge_index'], dtype=torch.long).contiguous()
         v = torch.tensor(data.get('v', 0.0), dtype=torch.float)
+        v = (v + 1) / 2.0
+        if v.dim() == 0:
+            v = v.unsqueeze(0)
         
-        return torch.geometric.data.Data(x=x, edge_index=edge_index), v
+        return Data(x=x, edge_index=edge_index, y=v)
 
 
     def __len__(self):
@@ -226,32 +252,3 @@ class NpzDataset(Dataset):
 
 
         return x, y_policy, y_value
-
-
-
-class GraphDataset(Dataset):
-    def __init__(self, folder_path: str):
-        # folder_path is "data/pro_matches/ts/graphs/"
-
-        self.samples = []   # list of paths to json files
-
-        game_dirs = glob(os.path.join(folder_path, 'game_*'))
-        for d in game_dirs:
-            for move_path in glob(os.path.join(d, 'move_*.json')):
-                self.samples.append(move_path)
-        # self.samples.sort()      # ???
-
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-        json_path = self.samples[idx]
-        with open(json_path, 'r') as f:
-            data = json.load(f)
-        x = torch.tensor(data['x'], dtype=torch.float)
-        edge_index = torch.tensor(data['edge_index'], dtype=torch.long).t().contiguous()
-        move_adj = torch.tensor(data['move_adj'], dtype=torch.float)
-        pi = torch.tensor(data['pi'], dtype=torch.float)
-        v = torch.tensor(data['v'], dtype=torch.float)
-        return Data(x=x, edge_index=edge_index), move_adj, pi, v
