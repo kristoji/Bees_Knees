@@ -8,11 +8,17 @@ from collections import defaultdict
 from multiprocessing import Pool
 
 
-def main():
-    parsed_args = parse_arguments()
-    sgf_folder = os.path.normpath(vars(parsed_args)["path"])
-    pgn_path = os.path.normpath(f"{sgf_folder}//pgn//")
+def main(path: str):
+    sgf_folder = os.path.normpath(path)
+    sgf_name = os.path.basename(sgf_folder)
+    pgn_path = os.path.normpath(f"{sgf_folder}//..//pgn-{sgf_name}//")
+    pgn_T = os.path.normpath(f"{pgn_path}//tournament//")
+    pgn_U = os.path.normpath(f"{pgn_path}//humans//")
+    pgn_B = os.path.normpath(f"{pgn_path}//bots//")
     os.makedirs(pgn_path, exist_ok=True)
+    os.makedirs(pgn_T, exist_ok=True)
+    os.makedirs(pgn_U, exist_ok=True)
+    os.makedirs(pgn_B, exist_ok=True)
     make_pgn_at = partial(make_pgn, sgf_path=sgf_folder, encoding="iso-8859-1")
     filenames = [
         os.path.basename(filename)[:-4]
@@ -66,7 +72,14 @@ def make_pgn(filename, sgf_path, encoding):
 
 def write_header(lines, filename, expansions, sgf_tail, sgf_path):
 
-    pgn_path = os.path.normpath(f"{sgf_path}//pgn//")
+    sgf_name = os.path.basename(sgf_path)
+    pgn_path = os.path.normpath(f"{sgf_path}//..//pgn-{sgf_name}//")
+    if filename.startswith("T!"):
+        pgn_path = os.path.normpath(f"{pgn_path}//tournament//")
+    elif filename.startswith("U!"):
+        pgn_path = os.path.normpath(f"{pgn_path}//humans//")
+    else:
+        pgn_path = os.path.normpath(f"{pgn_path}//bots//")
     players = dict()
     pattern_start = r";\s*P[01]\[0 Start P[01]\]"
     extracted_date = ".".join(filename.split("-")[-4:-1])
@@ -355,4 +368,6 @@ def drop_down_bug(current_x, current_y, destination_x, destination_y, placed_bug
 
 
 if __name__ == "__main__":
-    main()
+    parsed_args = parse_arguments()
+    path = vars(parsed_args)["path"]
+    main(path)

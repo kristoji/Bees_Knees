@@ -1,24 +1,131 @@
 import os
+import sys
 import json
 import zipfile
 from datetime import datetime
 import matplotlib.pyplot as plt
-
 import numpy as np
 import networkx as nx
+
+from pydrive.auth import GoogleAuth
+from pydrive.drive import GoogleDrive
 from ai.training import Training
 from engine.enums import GameState
 from engine.board import Board
 from engineer import Engine
 from engine.game import Bug, PlayerColor, Move, Position
-from engine.enums import Command, BugType, Direction
+from engine.enums import Direction, BugType
 
-# PARAMS
+from googleapiclient.errors import HttpError  # For handling API errors
+
+# ------------------ CONFIG ------------------
 VERBOSE = False
-PRO_MATCHES_FOLDER = "/content/drive/My Drive/Ortogonale/Hive_DB/tournament"
+# Google Drive folder IDs (replace with your actual IDs)
+
+# Google Drive folder IDs (replace with your actual IDs or set via env vars)
+TOURNAMENT_FOLDER_ID = os.getenv('TOURNAMENT_FOLDER_ID', '1fwWKgxPbFtbS1FlU4lIaFiFCKQO1tR6S')
+HIVE_DB_FOLDER_ID = os.getenv('HIVE_DB_FOLDER_ID', '1Dx_oIP3BwjxhNfuQpbMqvy0bzW77QpRx')
+GRAPH_FOLDER_ID = os.getenv('GRAPH_FOLDER_ID', '1pHgfgJ1nyTaN0LYJCsGWjJyNm0eRNvJY')
+# Optional: set your GCP project ID for clearer error messages
+DRIVE_PROJECT_ID = os.getenv('DRIVE_PROJECT_ID', 'hive-467917')
+LOCAL_TOURNAMENT = 'pgn-tournament'
+LOCAL_GRAPH = 'tournament'
 GAME_TO_PARSE = 1000
-PLOTS = True
-DEST_FOLDER = f"/content/drive/My Drive/Ortogonale/Hive_DB-GRAPH/"
+PLOTS = False
+# -------------- PyDrive Auth -----------------
+
+def authenticate_drive():
+    gauth = GoogleAuth()
+    # Try loading saved client credentials
+    gauth.LoadCredentialsFile('credentials.json')
+    if gauth.credentials is None:
+        gauth.LocalWebserverAuth()
+    elif gauth.access_token_expired:
+        gauth.Refresh()
+    else:
+        gauth.Authorize()
+    gauth.SaveCredentialsFile('credentials.json')
+    return GoogleDrive(gauth)
+
+# ----------- Drive Sync Helpers -------------
+
+def download_folder(drive, folder_id: str, local_path: str):
+    """
+    Download all files and subfolders from a Google Drive folder.
+    Raises a descriptive error if the Drive API is not enabled.
+    """
+    os.makedirs(local_path, exist_ok=True)
+    try:
+        file_list = drive.ListFile({'q': f"'{folder_id}' in parents and trashed=false"}).GetList()
+    except HttpError as e:
+        if e.resp.status == 403:
+            print("Error: Google Drive API access is not configured for this project.")
+            if DRIVE_PROJECT_ID:
+                print(f"Please enable the Drive API in the Google Cloud Console:\n"
+                      f"https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project={DRIVE_PROJECT_ID}")
+            else:
+                print("Please enable the Drive API in the Google Cloud Console:\n"
+                      "https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=YOUR_PROJECT_ID")
+            sys.exit(1)
+        else:
+            raise
+    for file in file_list[:5]:
+        file_id = file['id']
+        title = file['title']
+        if file['mimeType'] == 'application/vnd.google-apps.folder':
+            download_folder(drive, file_id, os.path.join(local_path, title))
+        else:
+            dest = os.path.join(local_path, title)
+            print(f"Downloading {title} -> {dest}")
+            drive.CreateFile({'id': file_id}).GetContentFile(dest)
+
+
+def upload_folder(drive, local_path: str, parent_folder_id: str):
+    """
+    Upload a local folder (and its contents) to Google Drive, preserving the directory tree.
+    """
+    # Create root folder on Drive
+    root_meta = {
+        'title': os.path.basename(local_path),
+        'mimeType': 'application/vnd.google-apps.folder',
+        'parents': [{'id': parent_folder_id}]
+    }
+    root_folder = drive.CreateFile(root_meta)
+    root_folder.Upload()
+    root_id = root_folder['id']
+
+    # Map relative paths to Drive folder IDs
+    folder_map = {'': root_id}
+
+    for root, dirs, files in os.walk(local_path):
+        rel_path = os.path.relpath(root, local_path)
+        # Determine parent Drive folder for this local folder
+        parent_id = folder_map.get(rel_path, root_id)
+
+        # Create subfolders on Drive and update map
+        for d in dirs:
+            sub_rel = os.path.normpath(os.path.join(rel_path, d))
+            sub_meta = {
+                'title': d,
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [{'id': parent_id}]
+            }
+            sub_folder = drive.CreateFile(sub_meta)
+            sub_folder.Upload()
+            folder_map[sub_rel] = sub_folder['id']
+
+        # Upload files into the correct Drive folder
+        for f in files:
+            file_path = os.path.join(root, f)
+            file_drive = drive.CreateFile({
+                'title': f,
+                'parents': [{'id': parent_id}]
+            })
+            file_drive.SetContentFile(file_path)
+            print(f"Uploading {file_path} -> Drive folder {parent_id}")
+            file_drive.Upload()
+
+# ------------- Logging Utils ----------------
 
 def log_header(title: str, width: int = 60, char: str = '='):
     bar = char * width
@@ -29,26 +136,6 @@ def log_header(title: str, width: int = 60, char: str = '='):
 def log_subheader(title: str, width: int = 50, char: str = '-'):
     bar = char * width
     print(f"{bar}\n{title.center(width)}\n{bar}", flush=True)
-
-
-def unzip_new_archives(directory: str) -> None:
-    if not os.path.isdir(directory):
-        raise ValueError(f"Directory not found: {directory}")
-    for filename in os.listdir(directory):
-        if filename.lower().endswith('.zip'):
-            zip_path = os.path.join(directory, filename)
-            extract_to = os.path.splitext(zip_path)[0]
-            if os.path.isdir(extract_to) and os.listdir(extract_to):
-                print(f"Skipping '{filename}': already extracted.")
-                continue
-            os.makedirs(extract_to, exist_ok=True)
-            try:
-                with zipfile.ZipFile(zip_path, 'r') as zf:
-                    zf.extractall(extract_to)
-                print(f"Extracted '{filename}' → '{extract_to}/'")
-            except zipfile.BadZipFile:
-                print(f"Warning: '{filename}' is not a valid zip archive.")
-
 
 def parse_pgn(file_path: str) -> list[str]:
     moves = []
@@ -496,8 +583,8 @@ def save_matrices(T_game, T_values, game, save_dir):
 
 def generate_matches(source_folder: str, verbose: bool = False, want_matrices: bool = False, want_graphs: bool = True) -> None:
     engine = Engine()
-    base_name = os.path.basename(source_folder)
-    base_dir = os.path.join(DEST_FOLDER, base_name)
+    # base_name = os.path.basename(source_folder)
+    base_dir = LOCAL_GRAPH
     os.makedirs(base_dir, exist_ok=True)
     graph_dir = base_dir
 
@@ -523,7 +610,7 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
         # ---- PLAYING GAME TO EXTRACT MATRICES ----
         engine.newgame(["Base+MLP"])
         T_game, T_values = [], []
-        graph_dir = os.path.join(base_dir, 'graphs')
+        # graph_dir = os.path.join(base_dir, 'graphs')
         value = -1.0
         v_values = []
         saved_turns = 0
@@ -592,10 +679,23 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
         game += 1
 
 
+# -------------- Main Workflow ----------------
+
+def main():
+    # Authenticate
+    drive = authenticate_drive()
+
+    # Download tournament data
+    log_header("Downloading tournament folder from Drive")
+    download_folder(drive, TOURNAMENT_FOLDER_ID, LOCAL_TOURNAMENT)
+
+    # Generate matches locally
+    log_header("Generating matches locally")
+    generate_matches(source_folder=LOCAL_TOURNAMENT, verbose=VERBOSE)
+
+    # Upload results back to Drive
+    log_header("Uploading graphs folder to Drive")
+    upload_folder(drive, LOCAL_GRAPH, HIVE_DB_FOLDER_ID)
+
 if __name__ == "__main__":
-    BASE_PATH = os.path.dirname(os.path.abspath(__file__))
-    if BASE_PATH.endswith("src"):
-        BASE_PATH = BASE_PATH[:-3]
-    os.chdir(BASE_PATH)
-    os.path.basename
-    generate_matches(source_folder=PRO_MATCHES_FOLDER, verbose=VERBOSE)
+    main()
