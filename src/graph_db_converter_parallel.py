@@ -1,0 +1,706 @@
+import os
+import sys
+import json
+import zipfile
+from datetime import datetime
+import matplotlib.pyplot as plt
+import numpy as np
+import networkx as nx
+import concurrent.futures
+
+from pydrive.auth import GoogleAuth
+from pydrive.drive import GoogleDrive
+from ai.training import Training
+from engine.enums import GameState
+from engine.board import Board
+from engineer import Engine
+from engine.game import Bug, PlayerColor, Move, Position
+from engine.enums import Direction, BugType
+from googleapiclient.errors import HttpError
+
+# ------------------ CONFIG ------------------
+VERBOSE = False
+TOURNAMENT_FOLDER_ID = os.getenv('TOURNAMENT_FOLDER_ID', '1fwWKgxPbFtbS1FlU4lIaFiFCKQO1tR6S')
+HIVE_DB_FOLDER_ID    = os.getenv('HIVE_DB_FOLDER_ID', '1Dx_oIP3BwjxhNfuQpbMqvy0bzW77QpRx')
+GRAPH_PARENT_ID      = os.getenv('GRAPH_FOLDER_ID',    '1pHgfgJ1nyTaN0LYJCsGWjJyNm0eRNvJY')
+DRIVE_PROJECT_ID     = os.getenv('DRIVE_PROJECT_ID',   'hive-467917')
+LOCAL_TOURNAMENT     = 'pgn-tournament'
+LOCAL_GRAPH          = 'tournament'
+GAME_TO_PARSE        = 1000
+PLOTS                = False
+MAX_WORKERS          = 4  # Number of threads for upload
+
+# -------------- PyDrive Auth -----------------
+
+def authenticate_drive():
+    gauth = GoogleAuth()
+    gauth.LoadCredentialsFile('credentials.json')
+    if gauth.credentials is None:
+        gauth.LocalWebserverAuth()
+    elif gauth.access_token_expired:
+        gauth.Refresh()
+    else:
+        gauth.Authorize()
+    gauth.SaveCredentialsFile('credentials.json')
+    return GoogleDrive(gauth)
+
+# ----------- Drive Sync Helpers -------------
+
+def download_folder(drive, folder_id: str, local_path: str):
+    os.makedirs(local_path, exist_ok=True)
+    try:
+        file_list = drive.ListFile({'q': f"'{folder_id}' in parents and trashed=false"}).GetList()
+    except HttpError as e:
+        if e.resp.status == 403:
+            print("Error: Drive API not configured.")
+            print(f"Enable here: https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project={DRIVE_PROJECT_ID}")
+            sys.exit(1)
+        else:
+            raise
+    for file in file_list:
+        fid, title = file['id'], file['title']
+        dest = os.path.join(local_path, title)
+        if file['mimeType'] == 'application/vnd.google-apps.folder':
+            download_folder(drive, fid, dest)
+        else:
+            print(f"Downloading {title} -> {dest}")
+            drive.CreateFile({'id': fid}).GetContentFile(dest)
+
+
+def upload_folder(drive, local_path: str, parent_folder_id: str):
+    root_meta = {'title': os.path.basename(local_path),
+                 'mimeType': 'application/vnd.google-apps.folder',
+                 'parents': [{'id': parent_folder_id}]}
+    root = drive.CreateFile(root_meta); root.Upload()
+    folder_map = {'': root['id']}
+    for r, dirs, files in os.walk(local_path):
+        rel = os.path.relpath(r, local_path)
+        pid = folder_map.get(rel, root['id'])
+        for d in dirs:
+            sub_rel = os.path.normpath(os.path.join(rel, d))
+            sub_meta = {'title': d,
+                        'mimeType': 'application/vnd.google-apps.folder',
+                        'parents': [{'id': pid}]}
+            sub = drive.CreateFile(sub_meta); sub.Upload()
+            folder_map[sub_rel] = sub['id']
+        for f in files:
+            p = os.path.join(r, f)
+            gfile = drive.CreateFile({'title': f, 'parents': [{'id': pid}]})
+            gfile.SetContentFile(p); gfile.Upload()
+            print(f"Uploaded {p} to Drive folder {pid}")
+
+# ------------- Logging Utils ----------------
+
+def log_header(title, width=60, char='='):
+    bar = char * width
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\n{bar}\n{ts} | {title.center(width-len(ts)-3)}\n{bar}\n", flush=True)
+
+
+def log_subheader(title, width=50, char='-'):
+    bar = char * width
+    print(f"{bar}\n{title.center(width)}\n{bar}", flush=True)
+
+def parse_pgn(file_path: str) -> list[str]:
+    moves = []
+    with open(file_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('['):
+                continue
+            parts = line.split('.')
+            if len(parts) > 1:
+                moves.append(parts[1].strip())
+    return moves
+
+
+def board_to_graph(board: Board) -> tuple[list[list[float]], list[list[int]], dict[tuple[Position, Bug], int]]:
+    """
+    Convert board object into node features x (using floats) and adjacency list edge_index.
+    Features per node: [player_color, insect_type, pinned, is_articulation] as floats:
+      - player_color: 1.0 for White, 0.5 for empty, 0.0 for Black
+      - insect_type: scaled float in [0,1], e.g. type_index / (num_types)
+      - pinned: float 1.0 or 0.0
+      - pinning: float 1.0 if the bug is above another bug, 0.0 otherwise
+      - is_articulation: float 1.0 or 0.0
+    """
+    valid_moves = board.get_valid_moves()
+
+    # ===================================== DESTINATIONS POSITIONS =====================================
+    dest_positions = list(set(move.destination for move in valid_moves if move.destination is not None))
+
+    # ===================================== BUGS POSITIONS =====================================
+    pos_to_bug = board._pos_to_bug
+    bugs_positions = list(pos_to_bug.keys())
+
+    # ===================================== DICT MAPPING NODE (pos,bug) TO INDEX =====================================
+    pos_bug_to_index = {}
+
+    pos_height_to_bug: dict[tuple[Position, int], Bug] = {}
+
+    # ===================================== ALL BUGS AND THEIR COUNT =====================================
+    all_bugs = {
+        (BugType.QUEEN_BEE, PlayerColor.WHITE) : 1,
+        (BugType.SPIDER, PlayerColor.WHITE) : 2,
+        (BugType.BEETLE, PlayerColor.WHITE) : 2,
+        (BugType.GRASSHOPPER, PlayerColor.WHITE) : 3,
+        (BugType.SOLDIER_ANT, PlayerColor.WHITE) : 3,
+        (BugType.MOSQUITO, PlayerColor.WHITE) : 1,
+        (BugType.LADYBUG, PlayerColor.WHITE) : 1,
+        (BugType.PILLBUG, PlayerColor.WHITE) : 1,
+
+        (BugType.QUEEN_BEE, PlayerColor.BLACK) : 1,
+        (BugType.SPIDER, PlayerColor.BLACK) : 2,
+        (BugType.BEETLE, PlayerColor.BLACK) : 2,
+        (BugType.GRASSHOPPER, PlayerColor.BLACK) : 3,
+        (BugType.SOLDIER_ANT, PlayerColor.BLACK) : 3,
+        (BugType.MOSQUITO, PlayerColor.BLACK) : 1,
+        (BugType.LADYBUG, PlayerColor.BLACK) : 1,
+        (BugType.PILLBUG, PlayerColor.BLACK) : 1,
+    }
+
+    # ====================================== CONST ALL BUGS COUNT =====================================
+    all_bugs_final = all_bugs.copy()
+
+    # ====================================== TYPE TO INDEX =====================================
+    types = list(BugType)
+    type_to_index = {bug_type: (i + 1) for i, bug_type in enumerate(types)}
+    num_types = len(types) + 1  # +1 for empty node (no bug)
+
+    # ===================================== NODES LIST =====================================
+    x = []
+
+    # ===================================== EVERY PLACED BUG IS A NODE =====================================
+    for pos in bugs_positions:
+        bugs = board._bugs_from_pos(pos)
+        art_pos = 1 if pos in board._art_pos else 0
+
+        # PLACING PLAYED BUGS IN THE NODES SET
+        for h, bug in enumerate(bugs):
+            color_feat = 1.0 if bug.color==PlayerColor.WHITE else 0.0
+            insect_feat = (type_to_index[bug.type]) / num_types  # Scale type index to [0,1], 0 is empty node
+            pinned = 1.0 if h < len(bugs)-1 else 0.0
+            pinning = 1.0 if h > 0 else 0.0  # If the bug is above another bug, it is pinned
+            art = 1.0 if h==0 and art_pos else 0.0
+            pos_bug_to_index[(pos, bug)] = len(x)  # Map position and bug to index
+            pos_height_to_bug[(pos, h)] = bug  # Map position and height to bug      
+            x.append([color_feat, insect_feat, pinned, pinning, art])
+
+            all_bugs[(bug.type, bug.color)] -= 1
+            if all_bugs[(bug.type, bug.color)] < 0:
+                print(f"Bug {bug.color},{bug.type} appears more times than expected in the board state.")
+                raise ValueError(f"NEGATIVE BUG COUNT!")
+                
+    # ===================================== EVERY DESTINATION IS AN EMPTY NODE =====================================
+    for pos in dest_positions:
+        #PLACING EMPTY NEIGHBOR CELLS IN THE NODES SET (destination of valid moves)
+        # ======= !!! NOTE !!! =======
+        # the following if is commented because we always want to have a free node on top of every bug for beetle movement
+        #   ---->   if not bugs:  # (If no bugs in this position) !!! INCORRECT !!!
+        # ============================
+        # If no bugs, use empty features
+        color_feat = 0.5
+        insect_feat = 0.0
+        pinned = 0.0
+        bugs = board._bugs_from_pos(pos)
+        pinning = 1.0 if len(bugs) > 1 else 0.0  # If there are bugs, the top bug is pinned
+        art_pos_feat = 0.0
+        pos_bug_to_index[(pos, None)] = len(x)  # Map position to index
+        x.append([color_feat, insect_feat, pinned, art_pos_feat])
+        height = len(board._bugs_from_pos(pos))  # Height of the stack at this position
+        pos_height_to_bug[(pos, height)] = None  # Map position and height to None (empty cell)
+
+    # ===================================== EVERY NON PLACED BUG IS A NODE =====================================
+    for (bug_type, color), count in all_bugs.items():
+        max_count = all_bugs_final[(bug_type, color)]
+        for i in range(max_count - count + 1, max_count + 1):
+            color_feat = [0, 1] if color == PlayerColor.WHITE else [0, 0]
+            insect_feat = (type_to_index[bug_type]) / num_types  # Scale type index to [0,1], 0 is empty node
+            pinned = 0.0
+            art_pos_feat = 0.0
+            if max_count > 1: # for Bugs with multiple instances
+                pos_bug_to_index[(None, Bug(color, bug_type, i))] = len(x) # Add dummy node for missing bugs
+            else: # for Bugs with single instance
+                pos_bug_to_index[(None, Bug(color, bug_type))] = len(x) # Add dummy node for missing bugs
+            x.append([color_feat, insect_feat, pinned, art_pos_feat])
+            # print(f"Adding dummy node for {color} {bug_type} {max_count - i - 1} at index {len(x) - 1}")
+
+    # ===================================== BUILDING THE GRAPH =====================================
+    G = nx.Graph()
+    G.add_nodes_from(range(len(x)))  # Add nodes for each bug position
+
+            # =====================================================================
+            # TO-THINK: is it useful to assign labels to the edges of the graph?
+            # The label can refer the type of neighbor direction
+            # =====================================================================
+    
+    # ===================================== ADDING EDGES FOR NEIGHBORS NODES =====================================
+    
+    # Map mapping to index for lookup
+    node_index = {key:i for i,key in enumerate(pos_height_to_bug)}
+    # Flat edges: same height across neighbors
+    for (pos, h), bug in pos_height_to_bug.items():
+        if pos is None: 
+            raise ValueError(f"Position {pos} is None, cannot add edges for non-placed bugs.")
+        i = node_index[(pos,h)]
+        for d in Direction.flat():
+            npos = board._get_neighbor(pos,d)
+            j = node_index.get((npos,h))
+            if j is not None:
+                G.add_edge(i,j)
+    
+    # Above/below within same stack
+    for pos, bugs in pos_to_bug.items():
+        for below, above in zip(bugs[:-1], bugs[1:]):
+            i = pos_bug_to_index[(pos, below)]
+            j = pos_bug_to_index[(pos, above)]
+            G.add_edge(i, j)
+            G.add_edge(j, i)
+        
+        if pos in dest_positions and bugs and bugs[-1]:  # If this position is a destination, connect the top bug to the empty cell above (a possible destination)
+            top_bug = pos_bug_to_index[(pos, bugs[-1])]
+            empty_node = pos_bug_to_index[(pos, None)]  
+            G.add_edge(top_bug, empty_node)
+            G.add_edge(empty_node, top_bug)
+
+    # ===================================== Convert G to edge_index list =====================================
+    row, col = zip(*G.edges()) if G.number_of_edges() > 0 else ([], [])
+    # undirected: add both directions
+    edge_index = [list(row) + list(col), list(col) + list(row)]
+
+    return x, edge_index, pos_bug_to_index
+
+def board_to_simple_honored_graph(board: Board) -> tuple[list[list[float]], list[list[int]], dict[tuple[Position, Bug], int]]:
+    """
+    Convert board object into node features x (using floats) and adjacency list edge_index.
+    Features per node: [player_color, insect_type, pinned, is_articulation] as floats:
+      - player_color: 1.0 for CURRENT_PLAYER, 0.5 for empty, 0.0 for OTHER_PLAYER
+      - insect_type: one-hot encoding of bug type, e.g. [0, 1, 0, 0, 0, 0, 0, 0] for Spider
+      - pinned: float 1.0 or 0.0
+      - pinning: float 1.0 if the bug is above another bug, 0.0 otherwise
+      - is_articulation: float 1.0 or 0.0
+    """
+    valid_moves = board.get_valid_moves()
+
+    # ===================================== DESTINATIONS POSITIONS =====================================
+    # not used
+
+    # ===================================== BUGS POSITIONS =====================================
+    pos_to_bug = board._pos_to_bug
+    bugs_positions = list(pos_to_bug.keys())
+
+    # ===================================== DICT MAPPING NODE (pos,bug) TO INDEX =====================================
+    pos_bug_to_index = {}
+
+    pos_height_to_bug: dict[tuple[Position, int], Bug] = {}
+
+    # ===================================== ALL BUGS AND THEIR COUNT =====================================
+    all_bugs = {
+        (BugType.QUEEN_BEE, PlayerColor.WHITE) : 1,
+        (BugType.SPIDER, PlayerColor.WHITE) : 2,
+        (BugType.BEETLE, PlayerColor.WHITE) : 2,
+        (BugType.GRASSHOPPER, PlayerColor.WHITE) : 3,
+        (BugType.SOLDIER_ANT, PlayerColor.WHITE) : 3,
+        (BugType.MOSQUITO, PlayerColor.WHITE) : 1,
+        (BugType.LADYBUG, PlayerColor.WHITE) : 1,
+        (BugType.PILLBUG, PlayerColor.WHITE) : 1,
+
+        (BugType.QUEEN_BEE, PlayerColor.BLACK) : 1,
+        (BugType.SPIDER, PlayerColor.BLACK) : 2,
+        (BugType.BEETLE, PlayerColor.BLACK) : 2,
+        (BugType.GRASSHOPPER, PlayerColor.BLACK) : 3,
+        (BugType.SOLDIER_ANT, PlayerColor.BLACK) : 3,
+        (BugType.MOSQUITO, PlayerColor.BLACK) : 1,
+        (BugType.LADYBUG, PlayerColor.BLACK) : 1,
+        (BugType.PILLBUG, PlayerColor.BLACK) : 1,
+    }
+
+    # ====================================== CONST ALL BUGS COUNT =====================================
+    all_bugs_final = all_bugs.copy()
+
+    # ====================================== TYPE TO INDEX =====================================
+    types = list(BugType)
+    type_to_index = {bug_type: (i + 1) for i, bug_type in enumerate(types)}
+    num_types = len(types) + 1  # +1 for empty node (no bug)
+
+    # ===================================== NODES LIST =====================================
+    x = []
+
+    # ===================================== EVERY PLACED BUG IS A NODE =====================================
+    for pos in bugs_positions:
+        bugs = board._bugs_from_pos(pos)
+        art_pos = 1 if pos in board._art_pos else 0
+
+        # PLACING PLAYED BUGS IN THE NODES SET
+        for h, bug in enumerate(bugs):
+            color_feat = 1.0 if bug.color==board.current_player_color else 0.0
+            insect_feat = [0] * num_types  # One-hot encoding of bug type
+            insect_feat[type_to_index[bug.type]] = 1.0  # Set the
+            pinned = 1.0 if h < len(bugs)-1 else 0.0
+            pinning = 1.0 if h > 0 else 0.0  # If the bug is above another bug, it is pinned
+            art = 1.0 if h==0 and art_pos else 0.0
+            pos_bug_to_index[(pos, bug)] = len(x)  # Map position and bug to index
+            pos_height_to_bug[(pos, h)] = bug  # Map position and height to bug      
+            x.append([color_feat, insect_feat, pinned, pinning, art])
+
+            all_bugs[(bug.type, bug.color)] -= 1
+            if all_bugs[(bug.type, bug.color)] < 0:
+                print(f"Bug {bug.color},{bug.type} appears more times than expected in the board state.")
+                raise ValueError(f"NEGATIVE BUG COUNT!")
+                
+    # ===================================== BUILDING THE GRAPH =====================================
+    G = nx.Graph()
+    G.add_nodes_from(range(len(x)))  # Add nodes for each bug position
+
+            # =====================================================================
+            # TO-THINK: is it useful to assign labels to the edges of the graph?
+            # The label can refer the type of neighbor direction
+            # =====================================================================
+    
+    # ===================================== ADDING EDGES FOR NEIGHBORS NODES =====================================
+    
+    # Map mapping to index for lookup
+    node_index = {key:i for i,key in enumerate(pos_height_to_bug)}
+    # Flat edges: same height across neighbors
+    for (pos, h), bug in pos_height_to_bug.items():
+        if pos is None: 
+            raise ValueError(f"Position {pos} is None, cannot add edges for non-placed bugs.")
+        i = node_index[(pos,h)]
+        for d in Direction.flat():
+            npos = board._get_neighbor(pos,d)
+            j = node_index.get((npos,h))
+            if j is not None:
+                G.add_edge(i,j)
+    
+    # Above/below within same stack
+    for pos, bugs in pos_to_bug.items():
+        for below, above in zip(bugs[:-1], bugs[1:]):
+            i = pos_bug_to_index[(pos, below)]
+            j = pos_bug_to_index[(pos, above)]
+            G.add_edge(i, j)
+            G.add_edge(j, i)
+
+    # ===================================== Convert G to edge_index list =====================================
+    row, col = zip(*G.edges()) if G.number_of_edges() > 0 else ([], [])
+    # undirected: add both directions
+    edge_index = [list(row) + list(col), list(col) + list(row)]
+
+    return x, edge_index, pos_bug_to_index
+
+def plot_and_save_graph(edge_index: list[list[int]], pos_bug_to_index: dict[tuple[Position, Bug], int], save_path="graph.png", figsize=(8,8), dpi=300):
+    """
+    Draw the graph using node labels that reflect bug color (w/b) and type.
+
+    Parameters:
+    - edge_index: [2 x E] list of edges
+    - pos_bug_to_index: dict mapping (position, Bug or None) to node index
+    - save_path: path to save PNG
+    """
+    # Build graph
+    G = nx.Graph()
+    if not edge_index or len(edge_index) < 2 or len(edge_index[0]) == 0:
+        G.add_node(0)
+    edges = list(zip(edge_index[0], edge_index[1]))
+    G.add_edges_from(edges)
+
+    # Reverse mapping: node index -> (pos, bug)
+    index_to_key = {idx: key for key, idx in pos_bug_to_index.items()}
+
+    # Generate labels and colors for all nodes
+    labels = {}
+    node_colors = []
+    for idx in G.nodes():
+        entry = index_to_key.get(idx)
+        if entry is None:
+            labels[idx] = ''
+            node_colors.append("skyblue")
+        else:
+            pos, bug = entry
+            if bug is None:
+                labels[idx] = ''
+                node_colors.append("skyblue")
+            else:
+                color_letter = 'w' if bug.color == PlayerColor.WHITE else 'b'
+                bug_letter = bug.type.value
+                labels[idx] = f"{color_letter}{bug_letter}"
+                if color_letter == 'w':
+                    node_colors.append("#FFFDD0")
+                elif color_letter == 'b':
+                    node_colors.append("grey")
+                else:
+                    node_colors.append("skyblue")
+
+    # Layout
+    pos_layout = nx.spring_layout(G)
+    plt.figure(figsize=figsize)
+    nx.draw_networkx_nodes(G, pos_layout, node_size=500, node_color=node_colors)
+    nx.draw_networkx_edges(G, pos_layout, edge_color="gray")
+    nx.draw_networkx_labels(G, pos_layout, labels, font_size=10)
+    plt.axis('off')
+
+    # Save
+    plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+    plt.close()
+    print(f"Graph saved to {save_path}")
+
+
+
+
+def board_move_to_indices(move: Move, pos_bug_to_index: dict[tuple[Position, Bug], int]) -> tuple[int, int]:
+    """
+    Map move string (e.g. 'wB1 wG3/') to (src_idx, dst_idx).
+    ATTENZIONE AL PILLBUG
+    """
+
+    src_idx = pos_bug_to_index.get((move.origin, move.bug))
+
+    dst_idx = pos_bug_to_index.get((move.destination, None))
+
+    return src_idx, dst_idx
+
+
+def save_graph(move_idx: int, pi_entry: list[tuple[Move, float]], board: Board, save_dir: str):
+    """
+    Salva un JSON con grafo e target per la mossa corrente.
+    """
+    if move_idx == 0: 
+        return
+    # get the adjacency list 
+    x, edge_index, pos_bug_to_index = board_to_graph(board)
+
+    if PLOTS:
+        plot_and_save_graph(edge_index, pos_bug_to_index, save_path=os.path.join(save_dir, f"move_{move_idx}.png"))
+    
+    # get the move adjacency matrix
+    N = len(x)
+    move_adj = [[0] * N for _ in range(N)]
+    pi_target = []
+    for move, prob in pi_entry:
+        i, j = board_move_to_indices(move, pos_bug_to_index)
+        move_adj[i][j] = 1
+        pi_target.append(prob)
+
+    graph_dict = {
+        'x': x,
+        'edge_index': edge_index,
+        'move_adj': move_adj,
+        'pi': pi_target,
+        'move_idx': move_idx,
+    }
+    os.makedirs(save_dir, exist_ok=True)
+    path = os.path.join(save_dir, f"move_{move_idx}.json")
+    with open(path, 'w') as f:
+        json.dump(graph_dict, f)
+
+def save_simple_honored_graph(move_idx: int, pi_entry: list[tuple[Move, float]], board: Board, save_dir: str):
+    """
+    Salva un JSON con grafo e target per la mossa corrente.
+    """
+    if move_idx == 0: 
+        return
+    # get the adjacency list 
+    #x, edge_index, pos_bug_to_index = board_to_graph(board)
+    x, edge_index, pos_bug_to_index = board_to_simple_honored_graph(board)
+
+
+    if PLOTS:
+        plot_and_save_graph(edge_index, pos_bug_to_index, save_path=os.path.join(save_dir, f"move_{move_idx}.png"))
+
+    graph_dict = {
+        'x': x,
+        'edge_index': edge_index,
+    }
+    os.makedirs(save_dir, exist_ok=True)
+    path = os.path.join(save_dir, f"move_{move_idx}.json")
+    with open(path, 'w') as f:
+        json.dump(graph_dict, f)
+
+
+def save_matrices(T_game, T_values, game, save_dir):
+
+    game_shape = (0, *Training.INPUT_SHAPE)
+    in_mats = np.empty(game_shape, dtype=np.float32)
+    out_mats = np.empty(game_shape, dtype=np.float32)
+    values = np.array(T_values, dtype=np.float32)
+    for i, (in_mat, out_mat) in enumerate(T_game):
+        try:
+            in_mats = np.append(in_mats, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+            out_mats = np.append(out_mats, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+        except Exception as e:
+            print(f"Index: {i}/{len(T_game)}")
+    
+            print("\nout_mat")
+            print(out_mat)
+            exit()
+
+    print(f"Game {game} matrices: {in_mats.shape}, {out_mats.shape}, {values.shape}")
+    assert in_mats.shape[0] == out_mats.shape[0] == values.shape[0]
+    os.makedirs(save_dir, exist_ok=True)
+    log_subheader(f"Saving game {game} matrices")
+    np.savez_compressed(
+        os.path.join(save_dir, f"game_{game}.npz"),
+        in_mats=in_mats,
+        out_mats=out_mats,
+        values=values
+    )
+
+
+def generate_matches(source_folder: str, verbose: bool = False, want_matrices: bool = False, want_graphs: bool = True) -> None:
+    engine = Engine()
+    # base_name = os.path.basename(source_folder)
+    base_dir = LOCAL_GRAPH
+    os.makedirs(base_dir, exist_ok=True)
+    graph_dir = base_dir
+
+    game = 1
+    for fname in os.listdir(source_folder):
+
+        game_dir = os.path.join(graph_dir, f"game_{game}")
+        os.makedirs(game_dir, exist_ok=True)
+
+        path_pgn = os.path.join(source_folder, fname)
+        log_subheader(f"Parsing file {fname}")
+        moves = parse_pgn(path_pgn)
+
+        # ---- TESTING GAME ----
+        try:
+            engine.newgame(["Base+MLP"])
+            for san in moves:
+                engine.play(san, verbose=False)
+        except Exception as e:
+            log_header(f"Skipping game {game} with file {fname} due to error: {e}")
+            continue
+
+        # ---- PLAYING GAME TO EXTRACT MATRICES ----
+        engine.newgame(["Base+MLP"])
+        T_game, T_values = [], []
+        # graph_dir = os.path.join(base_dir, 'graphs')
+        value = -1.0
+        v_values = []
+        saved_turns = 0
+
+        for move_idx, san in enumerate(moves):
+
+            if san != 'pass':
+                saved_turns += 1
+                # compute current policy and value
+                val_moves = engine.board.get_valid_moves()
+                pi = {m: 1.0 if m == engine.board._parse_move(san) else 0.0 for m in val_moves}
+                pi_entry = [(m,p) for m, p in pi.items()]
+
+                # save graph for this move
+                if want_graphs:
+                    #save_graph(move_idx, pi_entry, engine.board, game_dir)
+                    save_simple_honored_graph(saved_turns, pi_entry, engine.board, game_dir)
+
+                # collect matrices
+                if want_matrices:
+                    mats = Training.get_matrices_from_board(engine.board, pi)
+                    T_game += mats
+                    T_values += [value] * len(mats)
+
+                v_values.append(value)
+
+            value *= -1.0
+
+            engine.play(san, verbose=verbose)
+
+        #log_subheader(f"Saved turns: {saved_turns} for game {game} with file {fname}")
+        #log_subheader(f"v values {len(v_values)}")
+
+        # final outcome
+        log_subheader(f"Game {game} finished")
+        outcome = engine.board.state
+        final_mult = 1.0 if outcome == GameState.WHITE_WINS else -1.0 if outcome == GameState.BLACK_WINS else 0.0
+        
+        # adjust values and matrices
+        if want_matrices:
+            T_values = [v * final_mult for v in T_values]
+            save_matrices(T_game, T_values, game, base_dir)
+        if want_graphs:
+            v_values = [v * final_mult for v in v_values]
+            # for each json in game_dir, add the value
+            for json_file in os.listdir(game_dir):
+                if json_file.endswith('.json'):
+                    json_path = os.path.join(game_dir, json_file)
+                    with open(json_path, 'r') as f:
+                        graph_data = json.load(f)
+            #         # graph_data['v'] = v_values[int(json_file.split('_')[2].split('.')[0])]
+                    #print(int(json_file.split('_')[1].split('.')[0])-1)
+                    graph_data['v'] = v_values[int(json_file.split('_')[1].split('.')[0])-1]
+                    with open(json_path, 'w') as f:
+                        json.dump(graph_data, f)
+            
+
+        # save final board state
+        final_txt = os.path.join(base_dir, f"game_{game}_board.txt")
+        with open(final_txt, 'w') as f_out:
+            f_out.write(str(engine.board))
+
+        if game >= GAME_TO_PARSE:
+            log_header(f"Parsed {game} games; stopping.")
+            break
+        game += 1
+
+
+
+# -------------- Parallel Upload Wrapper ------
+
+def upload_game_wrapper(args):
+    drive, game_dir = args
+    upload_folder(drive, game_dir, GRAPH_PARENT_ID)
+
+# -------------- Main Workflow ----------------
+
+def generate_matches(drive, executor, source_folder, verbose=False):
+    engine = Engine()
+    os.makedirs(LOCAL_GRAPH, exist_ok=True)
+    for game, fname in enumerate(os.listdir(source_folder), start=1):
+        src = os.path.join(source_folder, fname)
+        game_dir = os.path.join(LOCAL_GRAPH, f"game_{game}")
+        os.makedirs(game_dir, exist_ok=True)
+
+        log_subheader(f"Parsing {fname}")
+        moves = parse_pgn(src)
+        try:
+            engine.newgame(["Base+MLP"])
+            for san in moves: engine.play(san, verbose=False)
+        except Exception as e:
+            log_header(f"Skipping {game}: {e}"); continue
+
+        engine.newgame(["Base+MLP"])
+        saved = 0; value = -1.0; v_vals = []
+        for idx, san in enumerate(moves):
+            if san!='pass':
+                saved +=1
+                pi = {m:1.0 if m==engine.board._parse_move(san) else 0.0 for m in engine.board.get_valid_moves()}
+                if True:
+                    save_simple_honored_graph(saved, list(pi.items()), engine.board, game_dir)
+                v_vals.append(value)
+            value *= -1.0
+            engine.play(san, verbose=verbose)
+        final = engine.board.state
+        mult = 1.0 if final==GameState.WHITE_WINS else -1.0 if final==GameState.BLACK_WINS else 0.0
+        for jf in os.listdir(game_dir):
+            if jf.endswith('.json'):
+                path = os.path.join(game_dir, jf)
+                with open(path) as f: d=json.load(f)
+                d['v'] = v_vals[int(jf.split('_')[1].split('.')[0])-1]*mult
+                with open(path,'w') as f: json.dump(d,f)
+        # schedule upload
+        executor.submit(upload_game_wrapper, (drive, game_dir))
+        if game>=GAME_TO_PARSE: break
+
+
+def main():
+    drive = authenticate_drive()
+    log_header("Downloading tournament folder")
+    download_folder(drive, TOURNAMENT_FOLDER_ID, LOCAL_TOURNAMENT)
+
+    log_header("Generating & uploading games")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        generate_matches(drive, executor, LOCAL_TOURNAMENT, verbose=VERBOSE)
+    log_header("All uploads complete.")
+
+if __name__=='__main__':
+    main()
