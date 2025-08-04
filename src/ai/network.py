@@ -352,8 +352,7 @@ class NeuralNetwork(nn.Module):
 
     def train_network(self, 
                     # train_data: Tuple[np.ndarray, np.ndarray, np.ndarray], 
-                    ts: str,
-                    iteration: int,
+                    folder_path:str,
                     num_epochs: int = 10, 
                     batch_size: int = 64, 
                     learning_rate: float = 0.001, 
@@ -373,7 +372,7 @@ class NeuralNetwork(nn.Module):
         # train_dataset: TensorDataset = TensorDataset(states_tensor, policy_targets_tensor, value_targets_tensor)
         # train_dataloader: DataLoader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True if len(train_dataset) > batch_size else False)
 
-        dataset = ConvDataset(folder_path=f"data/{ts}/iteration_{iteration}")
+        dataset = ConvDataset(folder_path=folder_path)
         #dataset = NpzDataset(folder_path=f"data/{ts}/iteration_{iteration}")
         train_dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 

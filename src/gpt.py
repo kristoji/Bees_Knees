@@ -12,6 +12,7 @@ from engine.board import Board
 from engineer import Engine
 from engine.game import Bug, PlayerColor, Move, Position
 from engine.enums import Command, BugType, Direction
+from ai.log_utils import log_header, log_subheader, reset_log
 
 # PARAMS
 VERBOSE = False
@@ -19,17 +20,6 @@ PRO_MATCHES_FOLDER = "/content/drive/My Drive/Ortogonale/Hive_DB/tournament"
 GAME_TO_PARSE = 1000
 PLOTS = True
 DEST_FOLDER = f"/content/drive/My Drive/Ortogonale/Hive_DB-GRAPH/"
-
-def log_header(title: str, width: int = 60, char: str = '='):
-    bar = char * width
-    ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n{bar}\n{ts} | {title.center(width - len(ts) - 3)}\n{bar}\n", flush=True)
-
-
-def log_subheader(title: str, width: int = 50, char: str = '-'):
-    bar = char * width
-    print(f"{bar}\n{title.center(width)}\n{bar}", flush=True)
-
 
 def unzip_new_archives(directory: str) -> None:
     if not os.path.isdir(directory):
@@ -441,7 +431,7 @@ def save_graph(move_idx: int, pi_entry: list[tuple[Move, float]], board: Board, 
     with open(path, 'w') as f:
         json.dump(graph_dict, f)
 
-def save_simple_honored_graph(move_idx: int, pi_entry: list[tuple[Move, float]], board: Board, save_dir: str):
+def save_simple_honored_graph(move_idx: int, board: Board, save_dir: str):
     """
     Salva un JSON con grafo e target per la mossa corrente.
     """

@@ -5,30 +5,45 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 from ai.graph_honored_network import GraphClassifier
+from ai.improved_honored_GNN import GraphClassifierImproved
 from ai.training import Training
 from ai.oracle import Oracle
 from ai.loader import GraphDataset
 from gpt import board_to_simple_honored_graph
+from engineer import Engine
+from trainer import log_header, log_subheader
+import os
+from ai.brains import MCTS
+from engine.enums import GameState
+from gpt import save_simple_honored_graph
+import json
+
+SHORT = 50
+LONG = 100
+SUPERLONG = 150
+TURN_LIMIT = 100
 
 class OracleGNN(Oracle):
     """
     Oracle that uses a neural network to predict the value and policy of a board state.
     """
     def __init__(self):
-        self.network = GraphClassifier(in_dim=13, hidden_dim=64, num_classes=1)
-        self.path = "pro_matches/GNN_Apr-3-2024/graphs"
-        self.train_loader =  GraphDataset(folder_path=self.path) # ------------> DA METTERE co dataloader
-
-    def training(self, ts: str, iteration: int) -> None:
+        #self.network = GraphClassifier(in_dim=13, hidden_dim=64, num_classes=1)
+        self.network = GraphClassifierImproved(in_dim=13, hidden_dim=64, num_classes=1)
+        
+    def training(self, train_data_path:str, epochs:int) -> None:
         """
         Train the neural network with the provided training data.
         T is a tuple of (in_mats, out_mats, values)
         """
+        self.path = train_data_path
+        self.train_loader =  GraphDataset(folder_path=self.path) # ------------> DA METTERE co dataloader
+
         if not self.network:
             raise ValueError("Neural network is not initialized.")
         self.network.train_network(
             train_loader=self.train_loader,
-            epochs=3,
+            epochs=epochs,
         )
 
     def save(self, path: str) -> None:
@@ -38,6 +53,12 @@ class OracleGNN(Oracle):
         self.path = path
         self.network.save(path)
 
+    def load(self, path: str) -> None:
+        """
+        Load weights
+        """
+        self.path = path
+        self.network.load(path)
 
     def copy(self) -> 'OracleGNN':
         """
@@ -50,11 +71,27 @@ class OracleGNN(Oracle):
         new_oracle.network.load(self.path) 
         return new_oracle
     
-    def compute_heuristic(self, board) -> float:
+    def compute_heuristic(self, board: Board, game: bool = True) -> float:
         v, _ = self.predict(board)
-        return v
+        
+        if game and isinstance(v, torch.Tensor):
+            v = v.detach().to('cpu').numpy()
 
-    def predict(self, board: Board) -> tuple[float, Dict[Move, float]]:
+        return v
+    
+    def flatten_nodes(self, x):
+        temp = []
+        for el in x:
+            flattened = []
+            for sub_el in el:
+                if isinstance(sub_el, list):
+                    flattened.extend(sub_el)  # More efficient than iterating
+                else:
+                    flattened.append(sub_el)
+            temp.append(flattened)
+        return temp
+
+    def predict(self, board: Board, game: bool = True) -> tuple[float, Dict[Move, float]]:
         """
         Predict the value and policy for the given board state.
         """
@@ -62,28 +99,39 @@ class OracleGNN(Oracle):
         # TODO : convert the board into a graph representation
         x, edge_index, pos_bug_to_index = board_to_simple_honored_graph(board)
 
-        # Create PyTorch Geometric Data object
-        data = Data(
-            x=torch.tensor(x, dtype=torch.float32),
-            edge_index=torch.tensor(edge_index, dtype=torch.long).t().contiguous(),
-            batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph        
-            )
-        
-        v = self.network.predict(data) # PREDICT THE STATE
+        x = self.flatten_nodes(x)
+
+        # Skip empty graphs -.--> TODO: we can do better?????
+        if len(x) == 0:
+            v = 0.5
+        else:
+            # Create PyTorch Geometric Data object
+            data = Data(
+                x = torch.tensor(x, dtype=torch.float),
+                edge_index=torch.tensor(edge_index, dtype=torch.long).contiguous(),
+                batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph        
+                )
+            
+            v = self.network.predict(data) # PREDICT THE STATE
 
         
         valid_moves = list(board.get_valid_moves())
         pi = {}
+
         for m in valid_moves:
+            
             board.safe_play(m) # safe to optimize
+            
             x, edge_index, pos_bug_to_index = board_to_simple_honored_graph(board)
+            x = self.flatten_nodes(x)
             data = Data(
                 x=torch.tensor(x, dtype=torch.float32),
-                edge_index=torch.tensor(edge_index, dtype=torch.long).t().contiguous(),
+                edge_index=torch.tensor(edge_index, dtype=torch.long).contiguous(),
                 batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph            
                 )
             pi[m] = 1 - self.network.predict(data)
-            board.undo(m)
+            
+            board.undo()
             
         # Softmax the probabilities
         if pi:
@@ -92,6 +140,85 @@ class OracleGNN(Oracle):
             probs /= np.sum(probs)
             pi = {move: prob for move, prob in zip(pi.keys(), probs)}
         else:
-            raise ValueError("No valid moves found in the board state.")
+            pi={}
+            #raise ValueError("No valid moves found in the board state.")
+
+        if game and isinstance(v, torch.Tensor):
+            v = v.detach().cpu().numpy()
+            #cast all pi elements to numpy
+            #pi = {move: prob.item().detach().cpu().numpy() for move, prob in pi.items()}
 
         return v, pi
+    
+    def generate_matches(self, iteration_folder: str, n_games: int = 500, n_rollouts: int = 1500, verbose: bool = False, perc_allowed_draws: float = float('inf')) -> None:
+
+        engine = Engine()
+        os.makedirs(iteration_folder, exist_ok=True)
+
+        game = 1
+        draw = 0
+        wins = 0
+        discarded = 0
+
+        while game < n_games:
+
+            log_header(f"Game {game} of {n_games}: {draw}/{wins} [D/W] - Discarded: {discarded}", width=70)
+
+            T_game = []
+            v_values = []
+
+            engine.newgame(["Base+MLP"])
+            s = engine.board
+            mcts_game = MCTS(oracle=self, num_rollouts=n_rollouts)
+            winner = None
+
+            game_folder = os.makedirs(iteration_folder+f"/game_{game}/", exist_ok=True)
+
+            turn = 1
+            value = 1.0
+
+            while not winner and num_moves <= TURN_LIMIT:
+
+                mcts_game.run_simulation_from(s, debug=False)
+
+                save_simple_honored_graph(move_idx=turn, board=s, save_dir=game_folder)
+
+                v_values.append(value)
+                value *= -1.0
+
+                a: str = mcts_game.action_selection(training=True)
+
+                engine.play(a, verbose=verbose)
+
+                winner: GameState = engine.board.state != GameState.IN_PROGRESS
+
+                num_moves += 1
+
+            if engine.board.state == GameState.DRAW:
+                draw += 1
+                if draw > 2 * (perc_allowed_draws * n_games):
+                    break
+                if draw > perc_allowed_draws * n_games:
+                    continue
+            else:
+                wins += 1
+
+            log_subheader(f"Game {game} finished with state {engine.board.state.name}")
+
+            final_value: float = 1.0 if engine.board.state == GameState.WHITE_WINS else -1.0 if engine.board.state == GameState.BLACK_WINS else 0.0
+
+            v_values = [v * final_value for v in v_values]
+
+            # for each json in game_dir, add the value
+            for json_file in os.listdir(game_folder):
+                if json_file.endswith('.json'):
+                    json_path = os.path.join(game_folder, json_file)
+                    with open(json_path, 'r') as f:
+                        graph_data = json.load(f)
+            #         # graph_data['v'] = v_values[int(json_file.split('_')[2].split('.')[0])]
+                    #print(int(json_file.split('_')[1].split('.')[0])-1)
+                    graph_data['v'] = v_values[int(json_file.split('_')[1].split('.')[0])-1]
+                    with open(json_path, 'w') as f:
+                        json.dump(graph_data, f)
+
+            game += 1

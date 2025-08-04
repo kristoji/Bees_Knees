@@ -231,26 +231,3 @@ class Training:
 
         return move_to_prob
 
-
-
-
-# class ZeroSumPerfInfoGame:
-    
-#     """
-#     ZerosumPerfinfGame
-#     .initial_state()->s
-#     .next_state(s, a)->s’
-#     .game_phase(s)-> winner
-#     """
-    
-#     def __init__(self) -> None:
-#         # TODO: generalizzare?
-#         self._board = None
-
-#     def initial_state(self):
-#         self._board = Board("Base+MLP")
-#         return self._board
-
-#     def next_state(self, board: Board, action: Position) -> Board:
-#         return board.play(action)
-

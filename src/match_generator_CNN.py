@@ -14,7 +14,7 @@ N_ROLLOUTS = 1000
 VERBOSE = False              # If True, prints the board state after each move
 SHORT = 50
 LONG = 100
-SUPERLONG = 300
+SUPERLONG = 150
 PRO_MATCHES_FOLDER = "pro_matches/games-Apr-3-2024/pgn"
 
 def log_header(title: str, width: int = 60, char: str = '='):

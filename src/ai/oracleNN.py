@@ -2,10 +2,18 @@ from engine.board import Board
 from engine.game import Move
 from typing import Dict
 import numpy as np
+from ai.brains import MCTS
 from ai.network import NeuralNetwork
 from ai.training import Training
 from ai.oracle import Oracle
-    
+from engineer import Engine
+import os
+from trainer import log_header, log_subheader
+from engine.enums import GameState
+
+SHORT = 50
+LONG = 100
+SUPERLONG = 300
 
 class OracleNN(Oracle):
     """
@@ -15,7 +23,7 @@ class OracleNN(Oracle):
         self.network = NeuralNetwork()
         self.path = ""    
 
-    def training(self, ts: str, iteration: int) -> None:
+    def training(self, train_data_path:str, epochs:int) -> None:
         """
         Train the neural network with the provided training data.
         T is a tuple of (in_mats, out_mats, values)
@@ -23,9 +31,8 @@ class OracleNN(Oracle):
         if not self.network:
             raise ValueError("Neural network is not initialized.")
         self.network.train_network(
-            ts=ts, 
-            iteration=iteration,
-            num_epochs=15, 
+            train_data_path = train_data_path,
+            num_epochs=epochs, 
             batch_size=32, 
             learning_rate=0.001,
             value_loss_weight=0.5 
@@ -78,3 +85,99 @@ class OracleNN(Oracle):
         #     raise ValueError("No valid moves found in the board state.")
 
         return v, pi
+    
+    def generate_matches(self, iteration_folder: str, n_games: int = 500, n_rollouts: int = 1500, verbose: bool = False, perc_allowed_draws: float = float('inf')) -> None:
+
+        engine = Engine()
+        os.makedirs(iteration_folder, exist_ok=True)
+
+        game = 1
+        draw = 0
+        wins = 0
+        discarded = 0
+
+        while game < n_games:
+
+            log_header(f"Game {game} of {n_games}: {draw}/{wins} [D/W] - Discarded: {discarded}", width=70)
+
+            T_game = []
+            v_values = []
+
+            engine.newgame(["Base+MLP"])
+            s = engine.board
+            mcts_game = MCTS(oracle=self, num_rollouts=n_rollouts)
+            winner = None
+
+            num_moves = 0
+            value = 1.0
+
+            while not winner and num_moves < SUPERLONG:
+
+                mcts_game.run_simulation_from(s, debug=False)
+
+                pi: dict[Move, float] = mcts_game.get_moves_probs()
+
+                mats = Training.get_matrices_from_board(s, pi)
+                v_values += [value]*len(mats)
+                value *= -1.0
+                T_game += mats
+
+                a: str = mcts_game.action_selection(training=True)
+
+                engine.play(a, verbose=verbose)
+
+                winner: GameState = engine.board.state != GameState.IN_PROGRESS
+
+                num_moves += 1
+
+            if num_moves >= SUPERLONG: # to avoid killing process for cache overflow
+                log_subheader(f"Game {game} exceeded maximum moves ({SUPERLONG}). Ending game early.")
+                discarded += 1
+                continue
+            elif engine.board.state == GameState.DRAW:
+                draw += 1
+                if draw > perc_allowed_draws * n_games:
+                    continue
+            else:
+                wins += 1
+
+            log_subheader(f"Game {game} finished with state {engine.board.state.name}")
+
+            final_value: float = 1.0 if engine.board.state == GameState.WHITE_WINS else -1.0 if engine.board.state == GameState.BLACK_WINS else 0.0
+
+            # -------------- 1st VERSION  --------------
+            game_shape = (0, *Training.INPUT_SHAPE)
+            T_0 = np.empty(shape=game_shape, dtype=np.float32)
+            T_1 = np.empty(shape=game_shape, dtype=np.float32)
+            T_2 = np.array(v_values, dtype=np.float32)
+            T_2 = T_2 * final_value # update the values using final_value
+
+
+            for in_mat, out_mat in T_game:
+                T_1 = np.append(T_1, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+                T_0 = np.append(T_0, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+
+            win_or_draw = "draws" if engine.board.state == GameState.DRAW else "wins"
+            short_or_long = "short" if num_moves < SHORT else "long" if num_moves < LONG else "superlong"
+
+            # Create the subdirectories for saving
+            save_dir = f"{iteration_folder}/{win_or_draw}/{short_or_long}"
+            os.makedirs(save_dir, exist_ok=True)
+
+            log_subheader(f"Saving game {game} in {save_dir}/game_{game}.npz")
+
+            # Save the training data for this game
+            np.savez_compressed(
+                f"{save_dir}/game_{game}.npz",
+                in_mats=T_0,
+                out_mats=T_1,
+                values=T_2,
+            )
+
+            log_subheader(f"Saving board state in {save_dir}/board_{game}.txt")
+
+            with open(f"{save_dir}/board_{game}.txt", "w") as f:
+                f.write(str(engine.board))
+
+            game += 1
+

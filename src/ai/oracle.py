@@ -31,4 +31,11 @@ class Oracle:
         h_arr /= h_arr.sum()
         pi = {move: prob for move, prob in zip(valid_moves, h_arr)} if h_arr.size > 0 else {}
         return v, pi
+
+    def training(self, train_data_path:str, epochs:int) -> None:
+        pass
+
+    def generate_matches(self, iteration_folder: str, n_games: int = 500, n_rollouts: int = 1500, verbose: bool = False, perc_allowed_draws: float = float('inf')) -> None:
+        pass
+
     

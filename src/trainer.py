@@ -6,12 +6,14 @@ from engineer import Engine
 from engine.game import Move
 from ai.oracle import Oracle
 from ai.oracleNN import OracleNN
+from ai.oracleGNN import OracleGNN
 import numpy as np
 import os
 from datetime import datetime
 import time
 from gen_dataset.match_generator import generate_matches
 import re
+from ai.log_utils import log_header, log_subheader, reset_log
 
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 if BASE_PATH[-3:] == "src":
@@ -32,6 +34,14 @@ N_ROLLOUTS = 1000
 PERC_ALLOWED_DRAWS = 0.2    # [0, 1]
 VERBOSE = True              # If True, prints the board state after each move
 TIME_LIMIT = 5.0            # seconds for each MCTS simulation
+DRAW_LIMIT = 100            # trials after the match ends in a draw
+PRETRAIN = True
+PRETRAIN_PATH = "models/pretrain_0.pt"
+CONSECUTIVE_UNSUCCESSES = 3   # Maximum number of iteration with no imrovement
+
+TRAINER_MODE = 2            # 1 for CNN, 2 for GNN
+GNN_PATH = "data/"
+CNN_PATH = f"data/TIMESTAMP/iteration_NUMBEROFITERATION"
 # DEBUG = False
 
 
@@ -57,22 +67,36 @@ def duel(new_player: Oracle, old_player: Oracle, games: int = 10) -> tuple[float
         white_player = mcts_game_old if game % 2 == 0 else mcts_game_new
         black_player = mcts_game_new if game % 2 == 0 else mcts_game_old
 
-
+        i = 0
         while not winner:
 
             white_player.run_simulation_from(s, debug=False)
             a: str = white_player.action_selection(training=False)
             ENGINE.play(a, verbose=VERBOSE)
+            i+= 1
 
             winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
+
             if winner:
+                break
+
+            if i == DRAW_LIMIT:
+                winner: GameState = GameState.DRAW
                 break
 
             black_player.run_simulation_from(s, debug=False)
             a: str = black_player.action_selection(training=False)
             ENGINE.play(a, verbose=VERBOSE)
+            i+= 1
     
             winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
+
+            if winner:
+                break
+
+            if i == DRAW_LIMIT:
+                winner: GameState = GameState.DRAW
+                break
 
 
         if ENGINE.board.state == GameState.WHITE_WINS:
@@ -87,86 +111,60 @@ def duel(new_player: Oracle, old_player: Oracle, games: int = 10) -> tuple[float
 
     return old_wins, new_wins
 
-def reset_log(string: str = ""):
-    return
-    with open("test/log.txt", "w") as f:
-        f.write(string)
 
-def log_header(title: str, width: int = 60, char: str = '='):
-    bar = char * width
-    ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n{bar}")
-    print(f"{ts} | {title.center(width - len(ts) - 3)}")
-    print(f"{bar}\n")
-
-def log_subheader(title: str, width: int = 50, char: str = '-'):
     bar = char * width
     print(f"{bar}")
     print(f"{title.center(width)}")
     print(f"{bar}")
 
-
 def main(): 
 
     reset_log()
     
-    #f_theta = Oracle()
-    f_theta: Oracle = OracleNN()  # Use the neural network version of the oracle
+    # ---------------------------- ORACLE CREATION ----------------------------
+    if TRAINER_MODE == 1:
+        f_theta = OracleNN()
+    elif TRAINER_MODE == 2:
+        f_theta: Oracle = OracleGNN()
+    else:
+        log_header(title="WRONG TRAINER MODE (1:CNN - 2:GNN)")
 
-    log_header("STARTING PRE-TRAINING")
-    
-    f_theta.training(ts="pro_matches", iteration=0)  # Initial training
+    # ---------------------------- PRETRAINED MODEL LOADING ----------------------------
+    if PRETRAIN:
+        f_theta.load(PRETRAIN_PATH)
 
-    log_subheader("Pre-training completed")
+    # ---------------------------- ITERATIONS LOOP ----------------------------
+    cons_unsuccess = 0 # counter for consecutive wins
 
-    # Ensure 'models' directory exists
-    os.makedirs("models", exist_ok=True)
+    for iteration in range(N_ITERATIONS): # at the end of every self-play iteration the training occurs
 
-    # Find all files starting with 'pretrain_' in 'models' directory
-    pretrain_files = [f for f in os.listdir("models") if f.startswith("pretrain_") and f.endswith(".pt")]
-    max_num = -1
-    pattern = re.compile(r"pretrain_(\d+)\.pt")
-    for fname in pretrain_files:
-        match = pattern.match(fname)
-        if match:
-            num = int(match.group(1))
-            if num > max_num:
-                max_num = num
-    next_num = max_num + 1
-    f_theta.save(f"models/pretrain_{next_num}.pt")
-
-    exit()
-
-    cons_unsuccess = 0
-
-    for iteration in range(N_ITERATIONS):
-        ts  = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        #ts = "2025-07-06_22-36-22"
-        os.makedirs(f"data/{ts}/iteration_{iteration}", exist_ok=True)
+        ts  = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") # time stamp
+        iteration_folder = f"data/{ts}/iteration_{iteration}" # folder where to save matches of the current iteration
+        os.makedirs(iteration_folder, exist_ok=True)
 
         log_header(f"STARTING ITERATION {iteration}")
 
-        generate_matches(   
-                            f_theta=f_theta, 
-                            iteration=iteration, 
-                            n_games=N_GAMES, 
-                            n_rollouts=N_ROLLOUTS, 
-                            verbose=VERBOSE, 
-                            perc_allowed_draws=PERC_ALLOWED_DRAWS)
+        # ------ MATCHES GENERATION - SELF PLAY ------
+        # generate_matches(   
+        #                     f_theta=f_theta, 
+        #                     iteration=iteration, 
+        #                     n_games=N_GAMES,
+        #                     n_rollouts=N_ROLLOUTS,
+        #                     verbose=VERBOSE,
+        #                     perc_allowed_draws=PERC_ALLOWED_DRAWS)
+        f_theta.generate_matches(iteration_folder=iteration_folder) #---------> TODO : generation from the oracle function
 
+        # ------ COPYNG THE AGENT ------
+        f_theta_new: Oracle = f_theta.copy()
 
-        if iteration == 0:
-            f_theta_new: Oracle = OracleNN()
-        else:
-            f_theta_new: Oracle = f_theta.copy()
+        # ------ TRAIMING THE COPY AS THE NEW AGENT ------
+        f_theta_new.training(train_data_path=iteration_folder, epochs= 15)
 
-        # f_theta_new.training((Ttot_0, Ttot_1, Ttot_2))
-        f_theta_new.training(ts=ts, iteration=iteration)
-
+        # ------ COMPARING OLD/NEW VERSION ------
         log_header("STARTING DUEL")
-
         old_wins, new_wins = duel(f_theta_new, f_theta, games=N_DUELS)
         
+        # ------ SAVING NEW BETTER VERSION ------
         if old_wins < new_wins:
             f_theta = f_theta_new.copy()
             f_theta.save(f"models/{iteration}.pt")
@@ -174,7 +172,7 @@ def main():
         else:
             cons_unsuccess += 1
 
-        if cons_unsuccess >= 3:
+        if cons_unsuccess >= CONSECUTIVE_UNSUCCESSES:
             print(f"Stopping training after {iteration} iterations due to no improvement.")
             break
         
