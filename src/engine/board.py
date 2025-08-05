@@ -321,26 +321,22 @@ class Board():
             )
         }
 
+    def _check_no_door(self, origin: Position, position: Position, direction: Direction) -> bool:
+        return (origin in ((right := self._get_neighbor(position, direction.right_of)), (left := self._get_neighbor(position, direction.left_of)))) == (bool(self._bugs_from_pos(right)) == bool(self._bugs_from_pos(left)))
+
     def _get_sliding_moves(self, bug: Bug, origin: Position, depth: int = 0) -> Set[Move]:
-        destinations: Set[Position] = set()
-        visited: Set[Position] = set()
-        stack: Set[tuple[Position, int]] = {(origin, 0)}
+        
+        destinations: set[Position] = set()
+        stack: set[tuple[Position, int, frozenset[Position]]] = {(origin, 0, frozenset({origin}))}
         unlimited_depth = depth == 0
         while stack:
-            current, current_depth = stack.pop()
-            visited.add(current)
+            current, current_depth, path = stack.pop()
             if unlimited_depth or current_depth == depth:
                 destinations.add(current)
             if unlimited_depth or current_depth < depth:
-                for d in Direction.flat():
-                    neighbor = self._get_neighbor(current, d)
-                    if neighbor not in visited and not self._bugs_from_pos(neighbor):
-                        right = self._get_neighbor(current, d.right_of)
-                        left = self._get_neighbor(current, d.left_of)
-                        # changes made here: he was not considering some moves (right/left != origin was outside)
-                        if bool(right != origin and self._bugs_from_pos(right)) != bool(left != origin and self._bugs_from_pos(left)):
-                            stack.add((neighbor, current_depth + 1))
-        return {Move(bug, origin, dest) for dest in destinations if dest != origin}
+                stack.update((neighbor, current_depth + 1, path | {neighbor}) for direction in Direction if (neighbor := self._get_neighbor(current, direction)) not in path and not self._bugs_from_pos(neighbor) and self._check_no_door(origin, current, direction))
+        return {Move(bug, origin, destination) for destination in destinations if destination != origin}
+
 
     def _get_beetle_moves(self, bug: Bug, origin: Position, virtual: bool = False) -> Set[Move]:
         moves: Set[Move] = set()
