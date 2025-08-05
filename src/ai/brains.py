@@ -175,7 +175,7 @@ def print_log2(msg: str) -> None:
 class MCTS(Brain):
     "Monte Carlo tree searcher. First rollout the tree then choose a move."
 
-    def __init__(self, oracle: Oracle, exploration_weight: int = 1, num_rollouts: int = 1000, time_limit: float = float("inf")) -> None:
+    def __init__(self, oracle: Oracle, exploration_weight: int = 10, num_rollouts: int = 1000, time_limit: float = float("inf")) -> None:
         super().__init__()
         self.init_node = None
         self.init_board = None  # the board to be used for the next rollout
@@ -185,8 +185,12 @@ class MCTS(Brain):
         self.time_limit = time_limit
         self.epsilon = 0.05  # small value to avoid time limit issues
 
-    def choose(self, training:bool) -> Node_mcts:
+    def choose(self, training:bool, debug:bool = False) -> Node_mcts:
         "Choose the best successor of node. (Choose a move in the game)"
+        if debug:
+            print("\n\nChildren of root node (sorted by visits):\n")
+            for child in sorted(self.init_node.children, key=lambda x: x.N, reverse=True):
+                print(f"Move: {self.init_board.stringify_move(child.move)} -> N = {child.N}, Q = {child.Q}, P = {child.P}")
         if training:
             # assert self.init_node.N == self.num_rollouts, "The number of rollouts must be equal to the number of visits to the root node."
             # print( sum([child.N for child in self.init_node.children]))
@@ -271,8 +275,7 @@ class MCTS(Brain):
 
         sqrt_N_vertex = math.sqrt(node.N)
         def uct_Norels(n:Node_mcts) -> float:
-            # return 10*n.Q + n.P * sqrt_N_vertex / (1 + n.N)
-            return n.Q + n.P * sqrt_N_vertex / (1 + n.N)
+            return n.Q + self.exploration_weight * n.P * sqrt_N_vertex / (1 + n.N)
 
         return max(node.children, key=uct_Norels)
 
@@ -298,10 +301,10 @@ class MCTS(Brain):
                 for _ in range(self.num_rollouts):
                     self.do_rollout()
 
-    def action_selection(self, training=False) -> str:
+    def action_selection(self, training=False, debug:bool = False) -> str:
         # , board: Board
         # assert board == self.init_board
-        node = self.choose(training)
+        node = self.choose(training=training, debug=debug)
         return self.init_board.stringify_move(node.move)
         
 
