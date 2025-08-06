@@ -1,5 +1,5 @@
 # from ai.network import NeuralNetwork
-from ai.brains import MCTS
+from ai.brains import MCTS, Random
 from ai.training import Training
 from engine.enums import GameState
 from engineer import Engine
@@ -43,9 +43,71 @@ TRAINER_MODE = 2            # 1 for CNN, 2 for GNN
 GNN_PATH = "data/"
 CNN_PATH = f"data/TIMESTAMP/iteration_NUMBEROFITERATION"
 # DEBUG = False
+def duel_random(player: Oracle, games: int = 10, time_limit:int = TIME_LIMIT) -> tuple[float, float]:
+    """
+    Duel between two players using MCTS to determine which player is stronger.
+    Returns the number of wins for each player: old_player and new_player.
+    """
+    player_wins = 0
+    random_wins = 0
+
+    for game in range(games):
+
+        log_subheader(f"Duel Game {game + 1} of {games}: PLAYER {player_wins} - {random_wins} RANDOM")
+
+        ENGINE.newgame(["Base+MLP"])
+        s = ENGINE.board
+        winner = None
+
+        mcts_player = MCTS(oracle=player, time_limit=time_limit)
+        random_player = Random()
+
+        white_player = mcts_player if game % 2 == 0 else random_player
+        black_player = random_player if game % 2 == 0 else mcts_player
+
+        i = 0
+        while not winner:
+            
+            a:str = white_player.calculate_best_move(s, "time", time_limit)
+            ENGINE.play(a, verbose=VERBOSE)
+            i+= 1
+
+            winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
+
+            if winner:
+                break
+
+            if i == DRAW_LIMIT:
+                winner: GameState = GameState.DRAW
+                break
+            
+            a: str = black_player.calculate_best_move(s, "time", time_limit)
+            ENGINE.play(a, verbose=VERBOSE)
+            i+= 1
+    
+            winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
+
+            if winner:
+                break
+
+            if i == DRAW_LIMIT:
+                winner: GameState = GameState.DRAW
+                break
 
 
-def duel(new_player: Oracle, old_player: Oracle, games: int = 10) -> tuple[float, float]:
+        if ENGINE.board.state == GameState.WHITE_WINS:
+            player_wins += 1 if game % 2 == 0 else 0
+            random_wins += 1 if game % 2 == 1 else 0
+        elif ENGINE.board.state == GameState.BLACK_WINS:
+            player_wins += 1 if game % 2 == 1 else 0
+            random_wins += 1 if game % 2 == 0 else 0
+        else:
+            player_wins += 0.5
+            random_wins += 0.5
+
+    return player_wins, random_wins
+
+def duel(new_player: Oracle, old_player: Oracle, games: int = 10,  time_limit:int = TIME_LIMIT) -> tuple[float, float]:
     """
     Duel between two players using MCTS to determine which player is stronger.
     Returns the number of wins for each player: old_player and new_player.
@@ -61,8 +123,8 @@ def duel(new_player: Oracle, old_player: Oracle, games: int = 10) -> tuple[float
         s = ENGINE.board
         winner = None
 
-        mcts_game_old = MCTS(oracle=old_player, time_limit=TIME_LIMIT)
-        mcts_game_new = MCTS(oracle=new_player, time_limit=TIME_LIMIT)
+        mcts_game_old = MCTS(oracle=old_player, time_limit=time_limit)
+        mcts_game_new = MCTS(oracle=new_player, time_limit=time_limit)
 
         white_player = mcts_game_old if game % 2 == 0 else mcts_game_new
         black_player = mcts_game_new if game % 2 == 0 else mcts_game_old
@@ -70,8 +132,7 @@ def duel(new_player: Oracle, old_player: Oracle, games: int = 10) -> tuple[float
         i = 0
         while not winner:
 
-            white_player.run_simulation_from(s, debug=False)
-            a: str = white_player.action_selection(training=False)
+            a: str = white_player.calculate_best_move(s, "time", time_limit)
             ENGINE.play(a, verbose=VERBOSE)
             i+= 1
 
@@ -84,8 +145,7 @@ def duel(new_player: Oracle, old_player: Oracle, games: int = 10) -> tuple[float
                 winner: GameState = GameState.DRAW
                 break
 
-            black_player.run_simulation_from(s, debug=False)
-            a: str = black_player.action_selection(training=False)
+            a: str = black_player.calculate_best_move(s, "time", time_limit)
             ENGINE.play(a, verbose=VERBOSE)
             i+= 1
     
@@ -162,7 +222,12 @@ def main():
 
         # ------ COMPARING OLD/NEW VERSION ------
         log_header("STARTING DUEL")
-        old_wins, new_wins = duel(f_theta_new, f_theta, games=N_DUELS)
+        old_wins, new_wins = duel(
+            f_theta_new, 
+            f_theta, 
+            games=N_DUELS, 
+            time_limit=TIME_LIMIT
+            )
         
         # ------ SAVING NEW BETTER VERSION ------
         if old_wins < new_wins:

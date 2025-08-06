@@ -53,11 +53,8 @@ class Brain(ABC):
 
 class Random(Brain):
     def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
-        if self._cache is None:
-            moves = board.valid_moves.split(";")
-            self._cache = choice(moves)
-        sleep(0.5)
-        return self._cache
+        moves = board.valid_moves.split(";")
+        return choice(moves)
 
 class AlphaBetaPruner(Brain):
 
@@ -184,6 +181,21 @@ class MCTS(Brain):
         self.oracle = oracle
         self.time_limit = time_limit
         self.epsilon = 0.05  # small value to avoid time limit issues
+
+    def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
+        if restriction == "depth":
+            self.time_limit = float("inf")  # ignore time limit
+            self.num_rollouts = value
+            self.run_simulation_from(board, debug=False)
+            a: str = self.action_selection(training=False)
+            return a 
+        elif restriction == "time":
+            self.time_limit = value
+            self.run_simulation_from(board, debug=False)
+            a: str = self.action_selection(training=False)
+            return a
+        else:
+            raise Error("Invalid restriction for MCTS")
 
     def choose(self, training:bool, debug:bool = False) -> Node_mcts:
         "Choose the best successor of node. (Choose a move in the game)"

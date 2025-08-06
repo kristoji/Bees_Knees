@@ -3,7 +3,7 @@ from ai.oracleGNN import OracleGNN
 from ai.oracleRND import OracleRND
 import os
 from ai.log_utils import reset_log, log_header, log_subheader
-from trainer import duel
+from trainer import duel, duel_random
 import re
 
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -20,7 +20,7 @@ ENGINE = Engine()
 # PARAMS
 N_ITERATIONS = 3
 N_GAMES = 50
-N_DUELS = 10
+N_DUELS = 2
 N_ROLLOUTS = 1000
 PERC_ALLOWED_DRAWS = 0.2    # [0, 1]
 VERBOSE = True              # If True, prints the board state after each move
@@ -66,9 +66,24 @@ def main():
 
     f_theta_random = OracleRND()
 
-    duel(new_player=f_theta_test, 
-         old_player=f_theta_random, 
-         games=6)        
+    # --- DUEL BETWEEN TWO ORACLES ---
+    old_wins, new_wins = duel(
+        new_player=f_theta_test, 
+        old_player=f_theta_random, 
+        games= N_DUELS,
+        time_limit=TIME_LIMIT
+        )
+    log_header(f"Final result: OLD {old_wins} - {new_wins} NEW")
+
+
+    # --- DUEL AGAINST RANDOM ---
+    player_wins, rnd_wins = duel_random(
+        player=f_theta_test, 
+        games=N_DUELS,
+        time_limit=TIME_LIMIT
+        )
+    log_header(f"Final result: PLAYER {player_wins} - {rnd_wins} RANDOM")
+
 
 if "__main__" == __name__:
     main()
