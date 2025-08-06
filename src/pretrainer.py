@@ -2,7 +2,8 @@ from engineer import Engine
 from ai.oracleGNN import OracleGNN
 from ai.oracleRND import OracleRND
 import os
-from ai.log_utils import reset_log, log_header, log_subheader, duel
+from ai.log_utils import reset_log, log_header, log_subheader
+from trainer import duel
 import re
 
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -39,7 +40,7 @@ def main():
 
     log_header("STARTING PRE-TRAINING")
     
-    f_theta.training(epochs=15, ts="dummy", iteration=-1)  # Initial training
+    f_theta.training(train_data_path= "pro_matches/GNN_Apr-3-2024/graphs/",epochs=15)  # Initial training
 
     log_subheader("Pre-training completed")
 

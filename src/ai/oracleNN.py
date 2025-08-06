@@ -8,7 +8,7 @@ from ai.training import Training
 from ai.oracle import Oracle
 from engineer import Engine
 import os
-from trainer import log_header, log_subheader
+from ai.log_utils import log_header, log_subheader
 from engine.enums import GameState
 
 SHORT = 50

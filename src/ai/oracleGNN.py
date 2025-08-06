@@ -11,7 +11,7 @@ from ai.oracle import Oracle
 from ai.loader import GraphDataset
 from gpt import board_to_simple_honored_graph
 from engineer import Engine
-from trainer import log_header, log_subheader
+from ai.log_utils import log_header, log_subheader
 import os
 from ai.brains import MCTS
 from engine.enums import GameState

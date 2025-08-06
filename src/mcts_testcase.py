@@ -10,10 +10,12 @@ test_gamestrings = [
 ]
 
 exploration_weights = [
-    5,
-    10,
-    15,
-    20,
+    #0.5,
+    8,
+    #5,
+    #10,
+    #15,
+    #20,
 ]
 
 oracles = [
