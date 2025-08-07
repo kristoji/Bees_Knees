@@ -1,18 +1,12 @@
-# from ai.network import NeuralNetwork
-from ai.brains import MCTS, Random
-from ai.training import Training
-from engine.enums import GameState
+
+import os
 from engineer import Engine
-from engine.game import Move
+from datetime import datetime
+from test.duel import duel, duel_random, cross_platform_duel
+
 from ai.oracle import Oracle
 from ai.oracleNN import OracleNN
 from ai.oracleGNN import OracleGNN
-import numpy as np
-import os
-from datetime import datetime
-import time
-from gen_dataset.match_generator import generate_matches
-import re
 from ai.log_utils import log_header, log_subheader, reset_log
 
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +16,7 @@ print(BASE_PATH)
 os.chdir(BASE_PATH)  # Change working directory to the base path
 os.makedirs("data", exist_ok=True)
 os.makedirs("models", exist_ok=True)
+print(f"Working directory set to: {os.getcwd()}")
 
 # GLOBALS
 ENGINE = Engine()
@@ -35,6 +30,7 @@ PERC_ALLOWED_DRAWS = 0.2    # [0, 1]
 VERBOSE = True              # If True, prints the board state after each move
 TIME_LIMIT = 5.0            # seconds for each MCTS simulation
 DRAW_LIMIT = 100            # trials after the match ends in a draw
+
 PRETRAIN = True
 PRETRAIN_PATH = "models/pretrain_0.pt"
 CONSECUTIVE_UNSUCCESSES = 3   # Maximum number of iteration with no imrovement
@@ -42,140 +38,20 @@ CONSECUTIVE_UNSUCCESSES = 3   # Maximum number of iteration with no imrovement
 TRAINER_MODE = 2            # 1 for CNN, 2 for GNN
 GNN_PATH = "data/"
 CNN_PATH = f"data/TIMESTAMP/iteration_NUMBEROFITERATION"
-# DEBUG = False
-def duel_random(player: Oracle, games: int = 10, time_limit:int = TIME_LIMIT) -> tuple[float, float]:
-    """
-    Duel between two players using MCTS to determine which player is stronger.
-    Returns the number of wins for each player: old_player and new_player.
-    """
-    player_wins = 0
-    random_wins = 0
 
-    for game in range(games):
-
-        log_subheader(f"Duel Game {game + 1} of {games}: PLAYER {player_wins} - {random_wins} RANDOM")
-
-        ENGINE.newgame(["Base+MLP"])
-        s = ENGINE.board
-        winner = None
-
-        mcts_player = MCTS(oracle=player, time_limit=time_limit)
-        random_player = Random()
-
-        white_player = mcts_player if game % 2 == 0 else random_player
-        black_player = random_player if game % 2 == 0 else mcts_player
-
-        i = 0
-        while not winner:
-            
-            a:str = white_player.calculate_best_move(s, "time", time_limit)
-            ENGINE.play(a, verbose=VERBOSE)
-            i+= 1
-
-            winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
-
-            if winner:
-                break
-
-            if i == DRAW_LIMIT:
-                winner: GameState = GameState.DRAW
-                break
-            
-            a: str = black_player.calculate_best_move(s, "time", time_limit)
-            ENGINE.play(a, verbose=VERBOSE)
-            i+= 1
-    
-            winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
-
-            if winner:
-                break
-
-            if i == DRAW_LIMIT:
-                winner: GameState = GameState.DRAW
-                break
+def niam():
+    # duel_random(player = Oracle(), games = 2, time_limit= 5, verbose = True, draw_limit=100)
+    cross_platform_duel(
+        exe_player_path= os.path.join(BASE_PATH, "models/nokamute"),
+        oracle_player= Oracle(),
+        is_exe_white=True,
+        games=2,
+        time_limit=5,
+        verbose=True,
+        draw_limit=100
+    )
 
 
-        if ENGINE.board.state == GameState.WHITE_WINS:
-            player_wins += 1 if game % 2 == 0 else 0
-            random_wins += 1 if game % 2 == 1 else 0
-        elif ENGINE.board.state == GameState.BLACK_WINS:
-            player_wins += 1 if game % 2 == 1 else 0
-            random_wins += 1 if game % 2 == 0 else 0
-        else:
-            player_wins += 0.5
-            random_wins += 0.5
-
-    return player_wins, random_wins
-
-def duel(new_player: Oracle, old_player: Oracle, games: int = 10,  time_limit:int = TIME_LIMIT) -> tuple[float, float]:
-    """
-    Duel between two players using MCTS to determine which player is stronger.
-    Returns the number of wins for each player: old_player and new_player.
-    """
-    old_wins = 0
-    new_wins = 0
-
-    for game in range(games):
-
-        log_subheader(f"Duel Game {game + 1} of {games}: OLD {old_wins} - {new_wins} NEW")
-
-        ENGINE.newgame(["Base+MLP"])
-        s = ENGINE.board
-        winner = None
-
-        mcts_game_old = MCTS(oracle=old_player, time_limit=time_limit)
-        mcts_game_new = MCTS(oracle=new_player, time_limit=time_limit)
-
-        white_player = mcts_game_old if game % 2 == 0 else mcts_game_new
-        black_player = mcts_game_new if game % 2 == 0 else mcts_game_old
-
-        i = 0
-        while not winner:
-
-            a: str = white_player.calculate_best_move(s, "time", time_limit)
-            ENGINE.play(a, verbose=VERBOSE)
-            i+= 1
-
-            winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
-
-            if winner:
-                break
-
-            if i == DRAW_LIMIT:
-                winner: GameState = GameState.DRAW
-                break
-
-            a: str = black_player.calculate_best_move(s, "time", time_limit)
-            ENGINE.play(a, verbose=VERBOSE)
-            i+= 1
-    
-            winner: GameState = ENGINE.board.state != GameState.IN_PROGRESS
-
-            if winner:
-                break
-
-            if i == DRAW_LIMIT:
-                winner: GameState = GameState.DRAW
-                break
-
-
-        if ENGINE.board.state == GameState.WHITE_WINS:
-            old_wins += 1 if game % 2 == 0 else 0
-            new_wins += 1 if game % 2 == 1 else 0
-        elif ENGINE.board.state == GameState.BLACK_WINS:
-            old_wins += 1 if game % 2 == 1 else 0
-            new_wins += 1 if game % 2 == 0 else 0
-        else:
-            old_wins += 0.5
-            new_wins += 0.5
-
-    return old_wins, new_wins
-
-
-    bar = char * width
-    print(f"{bar}")
-    print(f"{title.center(width)}")
-    print(f"{bar}")
 
 def main(): 
 
@@ -243,5 +119,6 @@ def main():
         
 
 if "__main__" == __name__:
-    main()
+    # main()
+    niam()
     print("Training completed.")

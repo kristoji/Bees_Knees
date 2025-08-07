@@ -172,7 +172,7 @@ def print_log2(msg: str) -> None:
 class MCTS(Brain):
     "Monte Carlo tree searcher. First rollout the tree then choose a move."
 
-    def __init__(self, oracle: Oracle, exploration_weight: int = 10, num_rollouts: int = 1000, time_limit: float = float("inf")) -> None:
+    def __init__(self, oracle: Oracle, exploration_weight: int = 10, num_rollouts: int = 1000, time_limit: float = float("inf"), debug: bool = False) -> None:
         super().__init__()
         self.init_node = None
         self.init_board = None  # the board to be used for the next rollout
@@ -181,16 +181,19 @@ class MCTS(Brain):
         self.oracle = oracle
         self.time_limit = time_limit
         self.epsilon = 0.05  # small value to avoid time limit issues
+        self.start_time = time()
+        self.debug = debug
 
     def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
         if restriction == "depth":
             self.time_limit = float("inf")  # ignore time limit
-            self.num_rollouts = value
+            self.num_rollouts = value # set max rollouts
             self.run_simulation_from(board, debug=False)
             a: str = self.action_selection(training=False)
             return a 
         elif restriction == "time":
-            self.time_limit = value
+            self.time_limit = value # set time limit
+            self.start_time = time() # set start time
             self.run_simulation_from(board, debug=False)
             a: str = self.action_selection(training=False)
             return a
@@ -218,6 +221,7 @@ class MCTS(Brain):
             def score(n: Node_mcts) -> float:
                 "Score function for the node. Higher is better."
                 return n.N 
+            # TODO: shuffle children with same best score
             return max(self.init_node.children, key=score)
         
         
@@ -289,7 +293,8 @@ class MCTS(Brain):
 
         sqrt_N_vertex = math.sqrt(node.N)
         def uct_Norels(n:Node_mcts) -> float:
-            return n.Q + self.exploration_weight * n.P * sqrt_N_vertex / (1 + n.N)
+            return n.Q + self.exploration_weight * n.P * sqrt_N_vertex / (1 + n.N) #----> FIXED EXPL WEIGHT
+            #return n.Q + (1 + (time() - self.start_time) / self.time_limit *(self.exploration_weight - 1)) * n.P * sqrt_N_vertex / (1 + n.N) # -----> LINEAR EXPL WEIGHT DURING TURN (NO SENSE)
 
         return max(node.children, key=uct_Norels)
 
@@ -300,6 +305,10 @@ class MCTS(Brain):
 
         self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key, 0)
         self._select_and_expand() # expand the root node without updating N (in order to get root.N = sum(children.N))
+
+        # if you can only do one move, return it
+        if len(self.init_node.children) == 1:
+            return
 
         terminal_states = 0
 
@@ -332,7 +341,7 @@ class MCTS(Brain):
 
     def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
         self.run_simulation_from(board)
-        return self.action_selection(board)
+        return self.action_selection(debug=self.debug)
 
     def get_moves_probs(self) -> dict[Move, float]:
         #, board:Board

@@ -5,7 +5,7 @@ import os
 from ai.log_utils import reset_log, log_header, log_subheader
 from trainer import duel, duel_random
 import re
-
+import torch
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 if BASE_PATH[-3:] == "src":
     BASE_PATH = BASE_PATH[:-3]
@@ -36,12 +36,29 @@ def main():
     #f_theta = Oracle()
     #f_theta: Oracle = OracleNN()  # Use the neural network version of the oracle
     
+    #check if cuda is available and set the device accordingly on pytorch
+    if torch.cuda.is_available() and False:
+        device = torch.device("cuda")
+    
+        # show the device name
+        print(f"Using device: {torch.cuda.get_device_name(0)}")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")  # For Apple Silicon Macs
+        print("Using Apple Silicon MPS")
+    else:
+        device = torch.device("cpu")
+        print("Using CPU")
+    
+    
+    #set device as an environment variable so that we can access it from everywhere
+    os.environ["TORCH_DEVICE"] = str(device)
+
     f_theta = OracleGNN()
 
     log_header("STARTING PRE-TRAINING")
     
-    f_theta.training(train_data_path= "pro_matches/GNN_Apr-3-2024/graphs/",epochs=15)  # Initial training
-
+    #f_theta.training(train_data_path= "pro_matches/GNN_Apr-3-2024/graphs/",epochs=15)  # Initial training
+    f_theta.training(train_data_path= "data/",epochs=20)  # Initial training
     log_subheader("Pre-training completed")
 
     # Ensure 'models' directory exists
@@ -62,7 +79,8 @@ def main():
     f_theta.save(f"models/pretrain_{next_num}.pt")
 
     f_theta_test = OracleGNN()
-    f_theta_test.load(f"models/pretrain_{max_num}.pt")
+    # Load the file that was just saved, not the previous max
+    f_theta_test.load(f"models/pretrain_{next_num}.pt")
 
     f_theta_random = OracleRND()
 

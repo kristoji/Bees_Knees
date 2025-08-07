@@ -17,7 +17,7 @@ class Node_mcts():
         # next player to play
         self.next_player_color: PlayerColor = None
 
-        self.move: Move = move
+        self.move: Optional[Move] = move
         self.parent: 'Node_mcts' = parent
         self.children: List['Node_mcts'] = []
 
@@ -33,10 +33,14 @@ class Node_mcts():
         "All possible successors of this board state"
 
         if not self.children:
-            for move in board.get_valid_moves():
-                child = Node_mcts(move=move, parent=self)
+            valid_moves = board.get_valid_moves()
+            if valid_moves:
+                for move in board.get_valid_moves():                
+                    child = Node_mcts(move=move, parent=self)
+                    self.children.append(child)
+            else:
+                child = Node_mcts(move=None, parent=self)
                 self.children.append(child)
-                
         return self.children
 
 

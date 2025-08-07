@@ -12,14 +12,24 @@ from engine.board import Board
 from engineer import Engine
 from engine.game import Bug, PlayerColor, Move, Position
 from engine.enums import Command, BugType, Direction
-from ai.log_utils import log_header, log_subheader, reset_log
 
 # PARAMS
 VERBOSE = False
 PRO_MATCHES_FOLDER = "/content/drive/My Drive/Ortogonale/Hive_DB/tournament"
 GAME_TO_PARSE = 1000
-PLOTS = True
+PLOTS = False
 DEST_FOLDER = f"/content/drive/My Drive/Ortogonale/Hive_DB-GRAPH/"
+
+def log_header(title: str, width: int = 60, char: str = '='):
+    bar = char * width
+    ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\n{bar}\n{ts} | {title.center(width - len(ts) - 3)}\n{bar}\n", flush=True)
+
+
+def log_subheader(title: str, width: int = 50, char: str = '-'):
+    bar = char * width
+    print(f"{bar}\n{title.center(width)}\n{bar}", flush=True)
+
 
 def unzip_new_archives(directory: str) -> None:
     if not os.path.isdir(directory):
@@ -530,7 +540,7 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
                 # save graph for this move
                 if want_graphs:
                     #save_graph(move_idx, pi_entry, engine.board, game_dir)
-                    save_simple_honored_graph(saved_turns, pi_entry, engine.board, game_dir)
+                    save_simple_honored_graph(saved_turns, engine.board, game_dir)
 
                 # collect matrices
                 if want_matrices:
@@ -580,6 +590,43 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
             log_header(f"Parsed {game} games; stopping.")
             break
         game += 1
+
+def generate_match_graphs(game_dir:str, game_moves: list):
+    engine = Engine()
+    engine.newgame(["Base+MLP"])
+    value = -1.0
+    v_values = []
+    saved_turns = 0
+
+    for san in game_moves:
+
+        if san != 'pass':
+            saved_turns += 1
+
+            save_simple_honored_graph(saved_turns, engine.board, game_dir)
+
+            v_values.append(value)
+
+        value *= -1.0
+
+        engine.play(san, verbose=False)
+
+    # final outcome
+    outcome = engine.board.state
+    final_mult = 1.0 if outcome == GameState.WHITE_WINS else -1.0 if outcome == GameState.BLACK_WINS else 0.0
+    
+    v_values = [v * final_mult for v in v_values]
+    # for each json in game_dir, add the value
+    for json_file in os.listdir(game_dir):
+        if json_file.endswith('.json'):
+            json_path = os.path.join(game_dir, json_file)
+            with open(json_path, 'r') as f:
+                graph_data = json.load(f)
+    #         # graph_data['v'] = v_values[int(json_file.split('_')[2].split('.')[0])]
+            # print(int(json_file.split('_')[1].split('.')[0])-1)
+            graph_data['v'] = v_values[int(json_file.split('_')[1].split('.')[0])-1]
+            with open(json_path, 'w') as f:
+                json.dump(graph_data, f)
 
 
 if __name__ == "__main__":

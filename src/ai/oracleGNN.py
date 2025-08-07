@@ -29,7 +29,13 @@ class OracleGNN(Oracle):
     """
     def __init__(self):
         #self.network = GraphClassifier(in_dim=13, hidden_dim=64, num_classes=1)
-        self.network = GraphClassifierImproved(in_dim=13, hidden_dim=64, num_classes=1)
+
+        self.device = torch.device(os.environ.get("TORCH_DEVICE", "cpu"))
+        kwargs_network = {
+            'conv_type': 'GAT'  # 'GIN', 'GAT', 'GCN'
+        }
+        self.network = GraphClassifierImproved(in_dim=13, hidden_dim=64, num_classes=1, **kwargs_network)
+        self.network.to(self.device)
         
     def training(self, train_data_path:str, epochs:int) -> None:
         """
@@ -41,11 +47,28 @@ class OracleGNN(Oracle):
 
         if not self.network:
             raise ValueError("Neural network is not initialized.")
+        
+        if self.device.type == 'cuda':
+            print(f"Pre-loading dataset to GPU: {self.device}")
+            self.train_loader = self._preload_to_gpu(self.train_loader)
+        
+        batch_size = 128
+        self.train_loader = self.train_loader.get_dataloader(batch_size=batch_size, shuffle=True, num_workers=0)
+
+        if not self.network:
+            raise ValueError("Neural network is not initialized.")
         self.network.train_network(
             train_loader=self.train_loader,
             epochs=epochs,
         )
 
+    def _preload_to_gpu(self, dataset):
+        """Pre-move dataset to GPU to avoid repeated transfers."""
+        for i in range(len(dataset)):
+            if dataset.data[i] is not None:
+                dataset.data[i] = dataset.data[i].to(self.device)
+        return dataset
+    
     def save(self, path: str) -> None:
         """
         Save weights
@@ -111,6 +134,7 @@ class OracleGNN(Oracle):
                 edge_index=torch.tensor(edge_index, dtype=torch.long).contiguous(),
                 batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph        
                 )
+            data = data.to(self.device)  # Move to the correct device
             
             v = self.network.predict(data) # PREDICT THE STATE
 
@@ -129,13 +153,14 @@ class OracleGNN(Oracle):
                 edge_index=torch.tensor(edge_index, dtype=torch.long).contiguous(),
                 batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph            
                 )
+            data = data.to(self.device)  # Move to the correct device
             pi[m] = 1 - self.network.predict(data)
             
             board.undo()
             
         # Softmax the probabilities
         if pi:
-            probs = np.array(list(pi.values()))
+            probs = np.array([v.cpu().numpy() if isinstance(v, torch.Tensor) else v for v in pi.values()])
             probs = np.exp(probs - np.max(probs))
             probs /= np.sum(probs)
             pi = {move: prob for move, prob in zip(pi.keys(), probs)}
@@ -145,8 +170,8 @@ class OracleGNN(Oracle):
 
         if game and isinstance(v, torch.Tensor):
             v = v.detach().cpu().numpy()
-            #cast all pi elements to numpy
-            #pi = {move: prob.item().detach().cpu().numpy() for move, prob in pi.items()}
+            # Convert all pi tensor values to numpy
+            pi = {move: prob.cpu().numpy() if isinstance(prob, torch.Tensor) else prob for move, prob in pi.items()}
 
         return v, pi
     

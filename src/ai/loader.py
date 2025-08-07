@@ -8,52 +8,35 @@ from glob import glob
 import json
 
 import torch
-from torch_geometric.data import Data
+from torch_geometric.data import Data, Batch
 
 
 class GraphDataset(Dataset):
-    def __init__(self, folder_path: str, max_cache_size: int = 1000):
-        self.samples = []
-        self.cache = {}
-        self.cache_order = []
-        self.max_cache_size = max_cache_size
-        
-        # Still collect file paths
-        game_dirs = glob(os.path.join(folder_path, 'game_*'))
-        for d in game_dirs:
-            for move_path in glob(os.path.join(d, 'move_*.json')):
-                self.samples.append(move_path)
+    def __init__(self, folder_path: str):
+        self.data = []
+        all_files = []
 
-    def __getitem__(self, idx):
-        json_path = self.samples[idx]
+        for subfolder in os.listdir(folder_path):
+            print(f"Processing subfolder: {subfolder}", flush=True)
+            game_dirs = glob(os.path.join(folder_path, subfolder, 'game_*'))
+
+            print(f"Found {len(game_dirs)} game directories in {subfolder}", flush=True)
+            for d in game_dirs:
+                for move_path in glob(os.path.join(d, 'move_*.json')):
+                    all_files.append(move_path)
         
-        # Check cache first
-        if json_path not in self.cache:
-            self._load_to_cache(json_path)
-        
-        data = self.cache[json_path]
-        # Skip None data (empty graphs)
-        if data is None:
-            # Return next valid sample or raise error
-            return self.__getitem__((idx + 1) % len(self.samples))
-        
-        return data
-    
-    def _load_to_cache(self, json_path):
-        # LRU cache eviction
-        if len(self.cache) >= self.max_cache_size:
-            oldest = self.cache_order.pop(0)
-            del self.cache[oldest]
-        
-        # Load and cache
-        with open(json_path, 'r') as f:
-            data = json.load(f)
-        
-        # Process once and store
-        processed_data = self._process_data(data)
-        self.cache[json_path] = processed_data
-        self.cache_order.append(json_path)
-    
+        # Load everything into memory at initialization
+        for json_path in tqdm(all_files, desc="Loading JSON files into memory"):
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+            
+            processed_data = self._process_data(data)
+            # Only add valid data (skip None/empty graphs)
+            if processed_data is not None:
+                self.data.append(processed_data)
+
+        print(f"Loaded {len(self.data)} graphs from {len(all_files)} JSON files.")
+
     def _process_data(self, data):
         x = data['x']
         temp = []
@@ -61,7 +44,7 @@ class GraphDataset(Dataset):
             flattened = []
             for sub_el in el:
                 if isinstance(sub_el, list):
-                    flattened.extend(sub_el)  # More efficient than iterating
+                    flattened.extend(sub_el)
                 else:
                     flattened.append(sub_el)
             temp.append(flattened)
@@ -79,10 +62,16 @@ class GraphDataset(Dataset):
         
         return Data(x=x, edge_index=edge_index, y=v)
 
+    def __getitem__(self, idx):
+        return self.data[idx]
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.data)
 
+    def get_dataloader(self, batch_size=32, shuffle=True, num_workers=0):
+        """Create a DataLoader with proper batching for graph data"""
+        from torch_geometric.loader import DataLoader
+        return DataLoader(self, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
         
 
 class ConvDataset(Dataset):

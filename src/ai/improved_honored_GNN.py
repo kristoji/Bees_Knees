@@ -8,19 +8,21 @@ from torch.utils.data import DataLoader
 from torch_geometric.utils import remove_self_loops, add_self_loops
 from tqdm import tqdm
 import math
-
+import os
 
 class GIN_Conv(MessagePassing):
     def __init__(self, MLP, eps=0.0):
         super().__init__(aggr='add')
         self.mlp = MLP
-        self.epsilon = torch.nn.Parameter(torch.tensor([eps]))
+        #get device from environment variable
+        self.device = torch.device(os.environ.get("TORCH_DEVICE", "cpu"))
+        self.epsilon = torch.nn.Parameter(torch.tensor([eps])).to(self.device)
 
     def message(self, x_j):
         return x_j
 
     def update(self, aggr_out, x):
-        x = (1 + self.epsilon) * x + aggr_out
+        x = (1 + self.epsilon.to(x.device)) * x + aggr_out
         return self.mlp(x)
 
     def forward(self, x, edge_index):
@@ -188,7 +190,7 @@ class Graph_Net(torch.nn.Module):
                  final_mlp_layers=2):
         
         super(Graph_Net, self).__init__()
-        
+        print("Using architecture:", conv_type)
         self.conv_type = conv_type
         self.num_layers = num_layers
         self.use_residual = use_residual
@@ -279,6 +281,34 @@ class Graph_Net(torch.nn.Module):
         # Classification
         x = self.classifier(x)
         return x
+    
+    def return_embedding(self, x, edge_index, batch):
+        """
+        Return the embedding of the graph without classification.
+        Useful for downstream tasks or visualization.
+        """
+        for i, conv in enumerate(self.convs):
+            if self.use_residual:
+                x = conv(x, edge_index)
+            else:
+                x = conv(x, edge_index)
+                x = self.norms[i](x)
+                x = F.relu(x)
+                x = self.dropouts[i](x)
+        
+        if self.pooling == 'mean':
+            x = global_mean_pool(x, batch)
+        elif self.pooling == 'max':
+            x = global_max_pool(x, batch)
+        elif self.pooling == 'add':
+            x = global_add_pool(x, batch)
+        elif self.pooling == 'concat':
+            x_mean = global_mean_pool(x, batch)
+            x_max = global_max_pool(x, batch)
+            x_add = global_add_pool(x, batch)
+            x = torch.cat([x_mean, x_max, x_add], dim=1)
+
+        return x
 
 
 class GraphClassifierImproved(pl.LightningModule):
@@ -301,24 +331,40 @@ class GraphClassifierImproved(pl.LightningModule):
 
     def forward(self, data, mode="train"):
         x, edge_index, batch_idx = data.x, data.edge_index, data.batch
-        x = self.model(x, edge_index, batch_idx)
-        x = x.squeeze(dim=-1)
-
-        preds = (x > 0).float()
-        data.y = data.y.float()
-
-        loss = self.loss_module(x, data.y)
-        acc = (preds == data.y).sum().float() / preds.shape[0]
-        return loss, acc
+        logits = self.model(x, edge_index, batch_idx)
+        logits = logits.squeeze(dim=-1)
+        
+        if mode=='train' or (hasattr(data, 'y') and data.y is not None):
+            data.y = data.y.float()
+            loss = self.loss_module(logits, data.y)
+            preds = (logits > 0).float()
+            acc = (preds == data.y).sum().float() / preds.shape[0]
+            return logits, loss, acc
+        else:
+            return logits
     
     def predict(self, data):
         self.model.eval()
         with torch.no_grad():
+            logits = self.forward(data, mode="predict")
+            if isinstance(logits, tuple):
+                logits = logits[0]  # Extract logits if tuple returned
+
+            # rimuoviamo sigmoide così che i valori unbounded vanno diretti alla softmax.
+            results = logits #results = torch.sigmoid(logits)
+            return results
+
+    def return_embedding(self, data):
+        self.model.eval()
+        with torch.no_grad():
             x, edge_index, batch_idx = data.x, data.edge_index, data.batch
-            x = self.model(x, edge_index, batch_idx)
-            x = x.squeeze(dim=-1)
-            return torch.sigmoid(x)
-    
+            embeddings = self.model.return_embedding(x, edge_index, batch_idx)
+            
+            # If logits is a tuple, extract the first element
+            if isinstance(embeddings, tuple):
+                embeddings = embeddings[0]
+            return embeddings
+
     def save(self, path: str) -> None:
         torch.save(self.state_dict(), path)
 
@@ -344,19 +390,19 @@ class GraphClassifierImproved(pl.LightningModule):
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
     def training_step(self, batch, batch_idx):
-        loss, acc = self.forward(batch, mode="train")
+        logits, loss, acc = self.forward(batch, mode="train")
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('train_acc', acc, prog_bar=False)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss, acc = self.forward(batch, mode="val")
+        logits, loss, acc = self.forward(batch, mode="val")
         self.log('val_loss', loss, prog_bar=True)
         self.log('val_acc', acc, prog_bar=False)
         return loss
 
     def test_step(self, batch, batch_idx):
-        _, acc = self.forward(batch, mode="test")
+        logits, _, acc = self.forward(batch, mode="test")
         self.log('test_acc', acc)
 
     def train_epoch(self, train_loader: DataLoader):
@@ -364,7 +410,10 @@ class GraphClassifierImproved(pl.LightningModule):
         self.model.train()
         total_loss = 0.0
         for batch in tqdm(train_loader, desc="Batches", leave=False):
-            loss, _ = self.forward(batch, mode="train")
+            # Move batch to the correct device
+            batch = batch.to(self.device)
+            
+            _, loss, _ = self.forward(batch, mode="train")
             
             # Manual optimization
             optimizer = self.configure_optimizers()
