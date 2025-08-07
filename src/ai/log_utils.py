@@ -14,3 +14,8 @@ def log_header(title: str, width: int = 60, char: str = '='):
 def log_subheader(title: str, width: int = 50, char: str = '-'):
     bar = char * width
     print(f"{bar}\n{title.center(width)}\n{bar}", flush=True)
+
+
+def log_subsubheader(title: str, width: int = 40, char: str = '~'):
+    bar = char * width
+    print(f"{bar}\n{title.center(width)}\n{bar}", flush=True)

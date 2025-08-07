@@ -202,7 +202,7 @@ class MCTS(Brain):
         if debug:
             print("\n\nChildren of root node (sorted by visits):\n")
             for child in sorted(self.init_node.children, key=lambda x: x.N, reverse=True):
-                print(f"Move: {self.init_board.stringify_move(child.move)} -> N = {child.N}, Q = {child.Q}, P = {child.P}")
+                print(f"Move: {self.init_board.stringify_move(child.move)} -> N = {child.N}, W = {child.W}, Q = {child.Q}, P = {child.P}, V = {child.V}")
         if training:
             # assert self.init_node.N == self.num_rollouts, "The number of rollouts must be equal to the number of visits to the root node."
             # print( sum([child.N for child in self.init_node.children]))
@@ -233,6 +233,8 @@ class MCTS(Brain):
         
         self._backpropagate(leaf, reward)
         print_log("Backpropagation done")
+
+        return leaf.is_terminal
         
 
     def _select_and_expand(self) -> Node_mcts:
@@ -299,19 +301,27 @@ class MCTS(Brain):
         self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key, 0)
         self._select_and_expand() # expand the root node without updating N (in order to get root.N = sum(children.N))
 
+        terminal_states = 0
+
         if self.time_limit < float("inf"):
             self.num_rollouts = 0
             start_time = time()
             while time() - start_time < self.time_limit - self.epsilon:
-                self.do_rollout()
+                if self.do_rollout() and debug: # return true if new leaf is terminal
+                    terminal_states += 1
                 self.num_rollouts += 1
         else:
             if debug:
                 for _ in tqdm(range(self.num_rollouts), desc="Rollouts", unit="rollout"):
-                    self.do_rollout()
+                    if self.do_rollout() and debug: # return true if new leaf is terminal
+                        terminal_states += 1
             else:
                 for _ in range(self.num_rollouts):
-                    self.do_rollout()
+                    if self.do_rollout() and debug: # return true if new leaf is terminal
+                        terminal_states += 1
+        
+        if debug:
+            print(f"\nTerminal states {terminal_states}/{self.num_rollouts} rollouts")
 
     def action_selection(self, training=False, debug:bool = False) -> str:
         # , board: Board

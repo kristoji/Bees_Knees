@@ -1,28 +1,61 @@
 from ai.brains import MCTS
 from ai.oracle import Oracle
 from ai.oracleRND import OracleRND
+from ai.oracleGNN import OracleGNN
 from engineer import Engine
 from engine.enums import GameState
-from ai.log_utils import log_header, log_subheader
+from ai.log_utils import log_header, log_subheader, log_subsubheader
 
-test_gamestrings = [
-    "Base+MLP;InProgress;Black[9];wS1;bB1 wS1-;wQ \\wS1;bG1 bB1\\;wA1 /wQ;bG2 bG1-;wB1 wQ/;bQ \\bG2;wG1 \\wB1;bG2 wS1\\;wA1 -wQ;bG2 /wG1;wG1 /wA1;bG1 wB1\\;wA2 -wA1;bA1 bQ/;wA2 wB1/",
+testcases = [
+    {
+        "start" : "Base+MLP;InProgress;Black[9];wS1;bB1 wS1-;wQ \\wS1;bG1 bB1\\;wA1 /wQ;bG2 bG1-;wB1 wQ/;bQ \\bG2;wG1 \\wB1;bG2 wS1\\;wA1 -wQ;bG2 /wG1;wG1 /wA1;bG1 wB1\\;wA2 -wA1;bA1 bQ/;wA2 wB1/",
+        "correct_moves" : ["bA1 -wS1"],
+        "desc" : "winning move selected"
+    },
+    {
+        "start" : "Base+MLP;InProgress;White[31];wS1;bB1 wS1-;wQ \\wS1;bG1 bB1\\;wA1 /wQ;bG2 bG1-;wB1 wQ/;bQ \\bG2;wG1 \\wB1;bG2 wS1\\;wA1 -wQ;bG2 /wG1;wG1 /wA1;bG1 wB1\\;wA2 -wA1;bA1 bQ/;wA2 wB1/;bA1 bQ-;wG1 -wA2;bA1 bQ/;wA2 -wA1;bA1 bQ-;wB1 bG1;bS1 \\bA1;wB1 -bS1;bS1 wG1\\;wB1 bG1;bA1 bQ/;wS1 bQ\\;bA1 wS1/;wB1 bS1;bB2 /bB1;wB1 bG1;bB2 wQ\\;wS1 /bB2;bA1 bQ/;wS1 bQ\\;bA1 wS1/;wS1 /bB2;bA1 bQ\\;wA2 -bG2;bA1 bB2\\;wS1 bB1\\;bA1 wS1\\;wA2 -wA1;bB2 bB1;wA2 -bG2;bB2 wQ\\;wA2 /wA1;bA1 bQ-;wA2 -wA1;bA1 wS1\\;wA2 -bG2;bA1 /wS1;wA2 -wA1;bA1 bQ\\;wA2 -bG2;bA1 bQ-;wA2 -wA1;bA1 /wS1",
+        "correct_moves" : ["wA2 -bA1", "wA2 bA1\\", "wA2 /bA1"],
+        "desc" : "pinned opponent ant"
+    },
+    {
+        "start": "Base+MLP;InProgress;Black[18];wA1;bP wA1\\;wL \\wA1;bA1 bP-;wG1 -wL;bQ bP\\;wQ \\wG1;bA2 /bP;wA2 wL/;bA1 \\wA2;wS1 wG1\\;bA2 -wQ;wS1 /bQ;bA3 bQ/;wA3 wA2\\;bA3 /wG1;wP wS1\\;bA3 wA3-;wP bQ\\;bG1 /bA2;wG2 /wS1;bG1 \\wQ;wS2 wS1\\;bG2 -bG1;wG2 bQ/;bA1 wS2\\;wM wG1\\;bG2 wQ/;wG3 wP-;bA1 bA2\\;wA2 bA3-;bG3 -bA2;wM -bG3;bL -bG1;wS2 wG2\\",
+        "correct_moves": ["bL bG2\\"],
+        "desc": "winning move selected"
+    },
+    {
+        "start": "Base+MLP;InProgress;Black[17];wA1;bP wA1\\;wL \\wA1;bA1 /bP;wQ wA1/;bQ bP\\;wA2 /wL;bA1 wQ/;wL /bP;bA2 bA1/;wA2 bQ-;wL \\wA2;wA2 \\bA2;bA3 bA2\\;wA3 wL-;bM bA3/;wG1 -wQ;bM -wG1;wM \\wA3;bA3 wA3/;wM /bQ;bG1 -bM;wP -wM;bB1 bG1\\;wP /bP;bQ bQ\\;wS1 /wP;bG1 bA1\\;wA2 \\bA3;wL /wA1;wA3 wS1\\;bP wQ\\;bQ wM\\",
+        "correct_moves": ["bA3 -bA1", "bA2 -bA1"],
+        "desc": "winning move selected"
+    },
+    {
+        "start": "Base+MLP;InProgress;Black[25];wA1;bP /wA1;wA2 \\wA1;bQ bP\\;wL wA1/;bA1 -bP;wQ wL/;bA1 \\wQ;wA2 bQ-;bA2 bA1/;wP wL\\;bA2 wP-;wA3 wA2\\;bS1 bA2-;wG1 wA3/;bM /bP;wA3 bQ\\;bM -wA1;wG1 /bP;bM -wL;wS1 wQ-;wG1 wA1\\;wA3 /bQ;bS1 wS1/;wG2 wA2-;bA3 \\bA1;wS2 wG2-;bM /bA1;wA1 bA2-;bP /bP;wM wA1\\;bA2 wQ\\;wA3 \\bA3;bA2 bQ\\;wG3 wS1\\;bP -wG1;wG1 /wG3;bG1 /bA3;wA3 /bQ;bG1 -bS1;wG1 wP\\;bG2 bS1/;wL -wP;bG2 wQ\\;wM -bP;bL /bA3;wA1 -bL;bA2 wA1\\;wA1 bQ\\",
+        "correct_moves": ["bL bM\\"],
+        "desc": "winning move selected"
+    },
+    {
+        "start": "Base+MLP;InProgress;White[1]",
+        "correct_moves": ["wS1","wB1","wG1","wA1","wM","wL","wP"],
+        "desc": "starting position, all moves are correct. v should be 0.5"
+    },
 ]
 
+
 exploration_weights = [
-    #0.5,
-    8,
+    #1,
     #5,
-    #10,
+    10,
     #15,
     #20,
 ]
 
 oracles = [
-    Oracle(),
-    OracleRND(), 
+    #Oracle(),
+    #OracleRND(),
+    OracleGNN().load("models/pretrain_0.pt"),
 ]
 
+
+#                                 TESTCASE 1
 # =============================================================================
 #  ORACLE       |  expl_w = 5  |  expl_w = 10  |  expl_w = 15  |  expl_w = 20         
 # =============================================================================
@@ -32,19 +65,16 @@ oracles = [
 
 
 TIME_LIMIT = 5.0
-TEST_DIM = 1
+TEST_DIM = 3
 
 def test_mcts():
     """
     Test the MCTS implementation with predefined game strings.
     """
-    engine = Engine()
 
-    for i, starting_gamestring in enumerate(test_gamestrings):
+    for i, testcase in enumerate(testcases):
         
-        log_subheader(f"Running test case {i + 1}/{len(test_gamestrings)}")
-        
-        engine.newgame([starting_gamestring])
+        log_subheader(f"Running test case {i + 1}/{len(testcases)}")
         
         for oracle in oracles:
 
@@ -55,21 +85,30 @@ def test_mcts():
                 right_moves = 0
 
                 for _ in range(TEST_DIM):
+
+                    engine = Engine()
+                    engine.newgame([testcase["start"]])
                     
                     # Run MCTS with the oracle
                     mcts = MCTS(oracle=oracle, exploration_weight=exploration_weight, time_limit=TIME_LIMIT)
-                    mcts.run_simulation_from(engine.board, debug=True)
+                    mcts.run_simulation_from(engine.board, debug=False)
                     a:str = mcts.action_selection(training=False, debug=True)
+
+                    v, pi = oracle.predict(engine.board)
+                    print(f"Predicted value: {v}")
+                    print(f"Predicted move probabilities: {pi}")
+
                     #print(f"Action selected: {a}")
                     engine.play(a, verbose=False)
 
-                    if engine.board.state != GameState.IN_PROGRESS:
+                    if a in testcase["correct_moves"]:
                         right_moves += 1
-
-                    engine.board.undo()
+                        log_subsubheader(testcase["desc"]) 
+                    else:
+                        log_subsubheader("NOT "+testcase["desc"])
 
                 log_subheader(f"Right moves: {right_moves}/{TEST_DIM}")
-                
+
         
 def main():
     """
