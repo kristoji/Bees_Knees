@@ -58,7 +58,7 @@ def main():
     log_header("STARTING PRE-TRAINING")
     
     #f_theta.training(train_data_path= "pro_matches/GNN_Apr-3-2024/graphs/",epochs=15)  # Initial training
-    f_theta.training(train_data_path= "data/",epochs=20)  # Initial training
+    f_theta.training(train_data_path= "data/",epochs=50)  # Initial training
     log_subheader("Pre-training completed")
 
     # Ensure 'models' directory exists
@@ -75,12 +75,15 @@ def main():
             if num > max_num:
                 max_num = num
     next_num = max_num + 1
-    log_subheader(f"Saving pre-trained model as 'pretrain_{next_num}.pt'")
-    f_theta.save(f"models/pretrain_{next_num}.pt")
+
+    architecture = f_theta.kwargs_network['conv_type']
+    namefile = f"pretrain_{architecture}_{next_num}.pt"
+    log_subheader(f"Saving pre-trained model as 'f{namefile}'")
+    f_theta.save(f"models/{namefile}")
 
     f_theta_test = OracleGNN()
     # Load the file that was just saved, not the previous max
-    f_theta_test.load(f"models/pretrain_{next_num}.pt")
+    f_theta_test.load(f"models/{namefile}.pt")
 
     f_theta_random = OracleRND()
 

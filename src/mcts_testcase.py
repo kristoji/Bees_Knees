@@ -1,10 +1,11 @@
 from ai.brains import MCTS
 from ai.oracle import Oracle
 # from ai.oracleRND import OracleRND
-# from ai.oracleGNN import OracleGNN
+from ai.oracleGNN import OracleGNN
 from engineer import Engine
 from engine.enums import GameState
 from ai.log_utils import log_header, log_subheader, log_subsubheader
+from ai.oracleGNN_batch import OracleGNN_BATCH
 
 testcases = [
     {
@@ -66,10 +67,19 @@ exploration_weights = [
     #20,
 ]
 
+gnn_oracle = OracleGNN()
+gnn_oracle.load("../models/pretrain_GAT_3.pt")
+
+# gnn_batch = OracleGNN_BATCH()
+# gnn_batch.load("../models/pretrain_GAT_3.pt")
+
+
+
 oracles = [
-    Oracle(),
+    # Oracle(),
     #OracleRND(),
-    # OracleGNN().load("models/pretrain_0.pt"),
+    gnn_oracle,
+    # gnn_batch,
 ]
 
 
@@ -82,15 +92,16 @@ oracles = [
 
 
 
-TIME_LIMIT = 5.0
-TEST_DIM = 3
+# TIME_LIMIT = 5.0
+TIME_LIMIT = float("inf")  # Set to infinity to let mcts do 1k rollouts
+TEST_DIM = 1
 
 def test_mcts():
     """
     Test the MCTS implementation with predefined game strings.
     """
 
-    for i, testcase in enumerate(testcases[-1:]):
+    for i, testcase in enumerate(testcases[2:3]):
         
         log_subheader(f"Running test case {i + 1}/{len(testcases)}")
         
@@ -113,8 +124,8 @@ def test_mcts():
                     a:str = mcts.action_selection(training=False, debug=True)
 
                     v, pi = oracle.predict(engine.board)
-                    #print(f"Predicted value: {v}")
-                    #print(f"Predicted move probabilities: {pi}")
+                    print(f"Predicted value: {v}")
+                    print(f"Predicted move probabilities: {pi}")
 
                     #print(f"Action selected: {a}")
                     engine.play(a, verbose=False)
@@ -123,7 +134,7 @@ def test_mcts():
                         right_moves += 1
                         log_subsubheader(testcase["desc"]) 
                     else:
-                        log_subsubheader("NOT "+testcase["desc"] + f" (selected: {a}) instead of {testcase['correct_moves']})")
+                        log_subsubheader("NOT "+testcase["desc"] + f" (selected: {a}) instead of ({testcase['correct_moves']})")
 
                 log_subheader(f"Right moves: {right_moves}/{TEST_DIM}")
 

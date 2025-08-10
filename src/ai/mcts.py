@@ -11,7 +11,7 @@ class Node_mcts():
         self.W = 0
         self.Q = 0
         self.P = 0
-        self.V = 0
+        self.V = -1
         self.hash = None
         self.gamestate: GameState = None
         # next player to play

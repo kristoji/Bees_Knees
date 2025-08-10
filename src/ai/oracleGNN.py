@@ -14,7 +14,7 @@ from engineer import Engine
 from ai.log_utils import log_header, log_subheader
 import os
 from ai.brains import MCTS
-from engine.enums import GameState
+from engine.enums import GameState, PlayerColor
 from gpt import save_simple_honored_graph
 import json
 
@@ -31,11 +31,12 @@ class OracleGNN(Oracle):
         #self.network = GraphClassifier(in_dim=13, hidden_dim=64, num_classes=1)
 
         self.device = torch.device(os.environ.get("TORCH_DEVICE", "cpu"))
-        kwargs_network = {
+        self.kwargs_network = {
             'conv_type': 'GAT'  # 'GIN', 'GAT', 'GCN'
         }
-        self.network = GraphClassifierImproved(in_dim=13, hidden_dim=64, num_classes=1, **kwargs_network)
+        self.network = GraphClassifierImproved(in_dim=13, hidden_dim=64, num_classes=1, **self.kwargs_network)
         self.network.to(self.device)
+        self.cache: Dict[int, float] = {}
         
     def training(self, train_data_path:str, epochs:int) -> None:
         """
@@ -95,10 +96,30 @@ class OracleGNN(Oracle):
         return new_oracle
     
     def compute_heuristic(self, board: Board, game: bool = True) -> float:
-        v, _ = self.predict(board)
-        
-        if game and isinstance(v, torch.Tensor):
-            v = v.detach().to('cpu').numpy()
+        if board.state != GameState.IN_PROGRESS:
+            if board.state == GameState.DRAW:
+                v = 0.5
+            else:
+                v = 1.0 if (board.state == GameState.WHITE_WINS and board.current_player_color == PlayerColor.WHITE) or (board.state == GameState.BLACK_WINS and board.current_player_color == PlayerColor.BLACK) else 0.0
+        else:
+            # v, _ = self.predict(board)    
+
+            x, edge_index, pos_bug_to_index = board_to_simple_honored_graph(board)
+
+            x = self.flatten_nodes(x)
+            # Create PyTorch Geometric Data object
+            data = Data(
+                x = torch.tensor(x, dtype=torch.float),
+                edge_index=torch.tensor(edge_index, dtype=torch.long).contiguous(),
+                batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph        
+                )
+            data = data.to(self.device)  # Move to the correct device
+            v = self.network.predict(data, use_sigmoid=True) # PREDICT THE STATE  
+            v = self._to_float(v)
+            # assert type(v) is float, f"Expected v to be float, got {type(v)}"
+            # [INVERTED NET]
+            v = 1 - v  
+                  
 
         return v
     
@@ -113,6 +134,19 @@ class OracleGNN(Oracle):
                     flattened.append(sub_el)
             temp.append(flattened)
         return temp
+
+    def _to_float(self, x):
+
+        if isinstance(x, torch.Tensor):
+            # detach -> cpu -> squeeze -> item
+            if x.numel() == 1:
+                return float(x.detach().cpu().item())
+            return float(x.detach().cpu().view(-1)[0].item())
+        if isinstance(x, np.ndarray):
+            if x.size == 1:
+                return float(x.squeeze())
+            return float(x.reshape(-1)[0])
+        return float(x)
 
     def predict(self, board: Board, game: bool = True) -> tuple[float, Dict[Move, float]]:
         """
@@ -136,31 +170,61 @@ class OracleGNN(Oracle):
                 )
             data = data.to(self.device)  # Move to the correct device
             
-            v = self.network.predict(data) # PREDICT THE STATE
+            if not self.cache.get(board.zobrist_key, None):
+                v = self.network.predict(data, use_sigmoid=True) # PREDICT THE STATE
+                v = self._to_float(v)
+                self.cache[board.zobrist_key] = v
+            else:
+                v = self.cache[board.zobrist_key]
 
-        
+        assert type(v) is float, f"Expected v to be float, got {type(v)}"
+        # [INVERTED NET]
+        v = 1-v
+
         valid_moves = list(board.get_valid_moves())
         pi = {}
 
         for m in valid_moves:
             
             board.safe_play(m) # safe to optimize
-            
-            x, edge_index, pos_bug_to_index = board_to_simple_honored_graph(board)
-            x = self.flatten_nodes(x)
-            data = Data(
-                x=torch.tensor(x, dtype=torch.float32),
-                edge_index=torch.tensor(edge_index, dtype=torch.long).contiguous(),
-                batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph            
-                )
-            data = data.to(self.device)  # Move to the correct device
-            pi[m] = 1 - self.network.predict(data)
-            
+
+            if board.state != GameState.IN_PROGRESS:
+                if board.state == GameState.DRAW:
+                    V = 0.5
+                else:
+                    V = 1.0 if (board.state == GameState.WHITE_WINS and board.current_player_color == PlayerColor.WHITE) or (board.state == GameState.BLACK_WINS and board.current_player_color == PlayerColor.BLACK) else 0.0
+
+
+                # V = torch.tensor([V], dtype=torch.float32, device=self.device)  # Ensure V is a tensor with Size 1
+            else:
+                x, edge_index, pos_bug_to_index = board_to_simple_honored_graph(board)
+                x = self.flatten_nodes(x)
+                data = Data(
+                    x=torch.tensor(x, dtype=torch.float32),
+                    edge_index=torch.tensor(edge_index, dtype=torch.long).contiguous(),
+                    batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph            
+                    )
+                data = data.to(self.device)  # Move to the correct device
+
+                if not self.cache.get(board.zobrist_key, None):
+                    V = self.network.predict(data, use_sigmoid=True)    # PREDICT THE STATE
+                    V = self._to_float(V)
+                    self.cache[board.zobrist_key] = V
+
+                else:
+                    V = self.cache[board.zobrist_key]
+
+                V = 1 - V # [INVERTED NET]
+
+            assert type(V) is float, f"Expected V to be float, got {type(V)}"
+            pi[m] = 1 - V
+
             board.undo()
             
         # Softmax the probabilities
         if pi:
-            probs = np.array([v.cpu().numpy() if isinstance(v, torch.Tensor) else v for v in pi.values()])
+
+            probs = np.array(list(pi.values()))
             probs = np.exp(probs - np.max(probs))
             probs /= np.sum(probs)
             pi = {move: prob for move, prob in zip(pi.keys(), probs)}
@@ -171,7 +235,7 @@ class OracleGNN(Oracle):
         if game and isinstance(v, torch.Tensor):
             v = v.detach().cpu().numpy()
             # Convert all pi tensor values to numpy
-            pi = {move: prob.cpu().numpy() if isinstance(prob, torch.Tensor) else prob for move, prob in pi.items()}
+            pi = {move: prob.cpu().numpy() if isinstance(prob, torch.Tensor) else prob for move, prob in pi.items()} # TODO: prob()..() [0] ! prendere solo il val, non il ndarr
 
         return v, pi
     

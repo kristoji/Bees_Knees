@@ -2,7 +2,10 @@ TODO.*
 *.spec
 myenv/
 
+models/
 data/
+logs/
+report.*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

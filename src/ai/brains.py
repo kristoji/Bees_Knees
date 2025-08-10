@@ -183,6 +183,7 @@ class MCTS(Brain):
         self.epsilon = 0.05  # small value to avoid time limit issues
         self.start_time = time()
         self.debug = debug
+        self.counter = 0  # used to check if the number of visits to the node is equal to the sum of visits to its children
 
     def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
         if restriction == "depth":
@@ -264,14 +265,20 @@ class MCTS(Brain):
         
         print_log(f"Leaf node: {curr_node}")
 
-        # expand di curr_node
-        if curr_node.is_unexplored:
+        if curr_node.is_terminal and curr_node.V == -1:
+            # compute the heuristic (only once) IF DRAW because, when calling the reward function, we want to avoid the DRAW if winning
+            v = self.oracle.compute_heuristic(curr_board)
+            curr_node.V = v
+
+        # expand di curr_node (non può essere terminale)
+        elif curr_node.is_unexplored:
             print_log("Nodo unexplored -> expand")
             v, pi = self.oracle.predict(curr_board)
             curr_node.expand(curr_board, v, pi)
-        elif curr_node.is_terminal:
-            v = self.oracle.compute_heuristic(curr_board)
-            curr_node.V = v
+
+        # TODO?
+        # mettere v terminale -+inf. attento al draw
+        # togliere 1- reward e mettere -reward
 
         if number_of_moves:
             curr_board.undo(number_of_moves)
@@ -284,13 +291,18 @@ class MCTS(Brain):
             leaf.N += 1
             leaf.W += reward
             leaf.Q = leaf.W / leaf.N
-            reward = 1 - reward
+            reward = 1 - reward # TODO: invece di tenere V in [0,1], tenerlo in [-inf, inf] e fare reward = -reward
             print_log(f"Backpropagation: {leaf} -> N = {leaf.N}, Q = {leaf.Q}")
             leaf = leaf.parent
             
-    def _uct_select(self, node: Node_mcts) -> Node_mcts:
+    def _uct_select(self, node: Node_mcts, verbose=False) -> Node_mcts:
         "Select a child of node, balancing exploration & exploitation"
 
+        if verbose:
+            print(f"Father node N: {node.N}, sum children N: {sum(child.N for child in node.children)}")
+        
+        
+        # assert node.N -1  == sum(child.N for child in node.children), "The number of visits to the node must be equal to the sum of visits to its children."
         sqrt_N_vertex = math.sqrt(node.N)
         def uct_Norels(n:Node_mcts) -> float:
             return n.Q + self.exploration_weight * n.P * sqrt_N_vertex / (1 + n.N) #----> FIXED EXPL WEIGHT

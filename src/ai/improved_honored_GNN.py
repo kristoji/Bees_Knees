@@ -343,7 +343,7 @@ class GraphClassifierImproved(pl.LightningModule):
         else:
             return logits
     
-    def predict(self, data):
+    def predict(self, data, use_sigmoid=False):
         self.model.eval()
         with torch.no_grad():
             logits = self.forward(data, mode="predict")
@@ -351,7 +351,7 @@ class GraphClassifierImproved(pl.LightningModule):
                 logits = logits[0]  # Extract logits if tuple returned
 
             # rimuoviamo sigmoide così che i valori unbounded vanno diretti alla softmax.
-            results = logits #results = torch.sigmoid(logits)
+            results = logits if not use_sigmoid else torch.sigmoid(logits)
             return results
 
     def return_embedding(self, data):

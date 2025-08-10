@@ -41,12 +41,21 @@ CNN_PATH = f"data/TIMESTAMP/iteration_NUMBEROFITERATION"
 
 def niam():
     # duel_random(player = Oracle(), games = 2, time_limit= 5, verbose = True, draw_limit=100)
-    cross_platform_duel(
-        exe_player_path= os.path.join(BASE_PATH, "models/nokamute"),
-        oracle_player= Oracle(),
-        is_exe_white=True,
-        games=2,
-        time_limit=5,
+    # cross_platform_duel(
+    #     exe_player_path= os.path.join(BASE_PATH, "models/nokamute"),
+    #     oracle_player= Oracle(),
+    #     is_exe_white=True,
+    #     games=2,
+    #     time_limit=5,
+    #     verbose=True,
+    #     draw_limit=100
+    # )
+    player = OracleGNN()
+    player.load("models/pretrain_GAT_3.pt")
+    duel_random(
+        player=player,
+        games=2,    
+        time_limit=5,#float("inf"),  # Set to infinity to let mcts do 1k rollouts
         verbose=True,
         draw_limit=100
     )

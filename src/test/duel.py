@@ -17,7 +17,7 @@ DRAW_LIMIT = 100            # turns after the match ends in a draw
 
 def duel_random(    player: Oracle, 
                     games: int = N_DUELS, 
-                    time_limit:int = TIME_LIMIT, 
+                    time_limit:float = TIME_LIMIT, 
                     verbose:bool = VERBOSE, 
                     draw_limit:int = DRAW_LIMIT) -> tuple[float, float]:
     """
@@ -71,6 +71,8 @@ def duel_random(    player: Oracle,
                 winner: GameState = GameState.DRAW
                 break
 
+            print("", end="", flush=True)
+
 
         if engine.board.state == GameState.WHITE_WINS:
             player_wins += 1 if game % 2 == 0 else 0
@@ -81,6 +83,8 @@ def duel_random(    player: Oracle,
         else:
             player_wins += 0.5
             random_wins += 0.5
+
+    log_subheader(f"End of Duel: PLAYER {player_wins} - {random_wins} RANDOM")
 
     return player_wins, random_wins
 
