@@ -10,7 +10,6 @@ import concurrent.futures
 
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
-from ai.training import Training
 from engine.enums import GameState
 from engine.board import Board
 from engineer import Engine

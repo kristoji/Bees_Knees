@@ -1,42 +1,146 @@
 from typing import Final, Optional
 from engine.enums import Error, PlayerColor, BugType, Direction
 import re
+import functools
+
+total_calls = 0
+def countit(fn):
+  @functools.wraps(fn)
+  def wrapper(*args, **kwargs):
+    global total_calls
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        total_calls += 1
+  return wrapper
+
+def print_counter():
+    global total_calls
+    print(f"[counter] total calls: {total_calls}")
 
 
 class Position:
+    POSITIONS = None
+    @countit
     def __init__(self, q: int, r: int):
-        self.q: Final[int] = q
-        self.r: Final[int] = r
-
-    def rotate_cw(self) -> "Position":
-        return Position(-self.r, self.q + self.r)
-
-    def to_oddr(self) -> tuple[int, int]:
-        col = self.q + (self.r - (self.r & 1)) // 2
-        row = self.r
-        return col, row
-    
-    @staticmethod
-    def from_oddr(col: int, row: int) -> "Position":
-        q = col - (row - (row & 1)) // 2
-        r = row
-        return Position(q, r)
+        self.r = r
+        self.q = q
+        self.hash = (q << 32) ^ (r & 0xffffffff)
 
     def __str__(self) -> str:
         return f"({self.q}, {self.r})"
 
     def __hash__(self) -> int:
-        return hash((self.q, self.r))
+        return self.hash
 
     def __eq__(self, other: object) -> bool:
-        return self is other or (isinstance(other, Position) and self.q == other.q and self.r == other.r)
+        return self is other 
 
     def __add__(self, other: object):
-        return Position(self.q + other.q, self.r + other.r) if isinstance(other, Position) else NotImplemented
+        return Position.POSITIONS[(self.q + other.q, self.r + other.r)] if isinstance(other, Position) else NotImplemented
 
     def __sub__(self, other: object):
-        return Position(self.q - other.q, self.r - other.r) if isinstance(other, Position) else NotImplemented
+        return Position.POSITIONS[(self.q - other.q, self.r - other.r)] if isinstance(other, Position) else NotImplemented
 
+    def get_neighbor(self, direction: Direction) -> "Position":
+        match direction:
+            case Direction.RIGHT:
+                p = Position.POSITIONS[(1, 0)]
+            case Direction.UP_RIGHT:
+                p = Position.POSITIONS[(0, 1)]
+            case Direction.UP_LEFT:
+                p = Position.POSITIONS[(-1, 1)]
+            case Direction.LEFT:
+                p = Position.POSITIONS[(-1, 0)]
+            case Direction.DOWN_LEFT:
+                p = Position.POSITIONS[(0, -1)]
+            case Direction.DOWN_RIGHT:
+                p = Position.POSITIONS[(1, -1)]
+            case Direction.BELOW:
+                p = Position.POSITIONS[(0, 0)]
+            case Direction.ABOVE:
+                p = Position.POSITIONS[(0, 0)]
+        return self + p
+    
+Position.POSITIONS = {
+    (q, r): Position(q, r) for q in range(-32, 32) for r in range(-32, 32)
+}
+# class Position:
+#     @countit
+#     def __init__(self, q: int, r: int):
+#         self.q: Final[int] = q
+#         self.r: Final[int] = r
+#         # self.hash = (q << 32) ^ (r & 0xffffffff)
+
+#     def rotate_cw(self) -> "Position":
+#         return Position(-self.r, self.q + self.r)
+
+#     def to_oddr(self) -> tuple[int, int]:
+#         col = self.q + (self.r - (self.r & 1)) // 2
+#         row = self.r
+#         return col, row
+    
+#     @staticmethod
+#     def from_oddr(col: int, row: int) -> "Position":
+#         q = col - (row - (row & 1)) // 2
+#         r = row
+#         return Position(q, r)
+
+#     def __str__(self) -> str:
+#         return f"({self.q}, {self.r})"
+
+#     def __hash__(self) -> int:
+#         return (self.q << 32) ^ (self.r & 0xffffffff)
+
+#     def __eq__(self, other: object) -> bool:
+#         return self is other or (isinstance(other, Position) and self.q == other.q and self.r == other.r)
+
+#     def __add__(self, other: object):
+#         return Position(self.q + other.q, self.r + other.r) if isinstance(other, Position) else NotImplemented
+
+#     def __sub__(self, other: object):
+#         return Position(self.q - other.q, self.r - other.r) if isinstance(other, Position) else NotImplemented
+    
+#     def get_neighbor(self, direction: Direction) -> "Position":
+#         match direction:
+#             case Direction.RIGHT:
+#                 p = Position(1, 0)
+#             case Direction.UP_RIGHT:
+#                 p = Position(0, 1)
+#             case Direction.UP_LEFT:
+#                 p = Position(-1, 1)
+#             case Direction.LEFT:
+#                 p = Position(-1, 0)
+#             case Direction.DOWN_LEFT:
+#                 p = Position(0, -1)
+#             case Direction.DOWN_RIGHT:
+#                 p = Position(1, -1)
+#             case Direction.BELOW:
+#                 p = Position(0, 0)
+#             case Direction.ABOVE:
+#                 p = Position(0, 0)
+#         return self + p
+
+#     @staticmethod
+#     def neighbor_delta(direction: Direction) -> "Position":
+#         match direction:
+#             case Direction.RIGHT:
+#                 return Position(1, 0)
+#             case Direction.UP_RIGHT:
+#                 return Position(0, 1)
+#             case Direction.UP_LEFT:
+#                 return Position(-1, 1)
+#             case Direction.LEFT:
+#                 return Position(-1, 0)
+#             case Direction.DOWN_LEFT:
+#                 return Position(0, -1)
+#             case Direction.DOWN_RIGHT:
+#                 return Position(1, -1)
+#             case Direction.BELOW:
+#                 return Position(0, 0)
+#             case Direction.ABOVE:
+#                 return Position(0, 0)
+            
 
 class Bug:
     COLORS: Final[dict[str, PlayerColor]] = {color.code: color for color in PlayerColor}

@@ -1,12 +1,57 @@
-from ai.brains import MCTS
-from ai.oracle import Oracle
-# from ai.oracleRND import OracleRND
-from ai.oracleGNN import OracleGNN
 from engineer import Engine
 from engine.enums import GameState
 from ai.log_utils import log_header, log_subheader, log_subsubheader
-from ai.oracleGNN_batch import OracleGNN_BATCH
+from ai.oracleGNN import OracleGNN
+from ai.mcts_batch import MCTS_BATCH
+from engine.game import print_counter
 
+#architettura corrente da cambiare in base al file palle palle
+kwargs_network = { 
+        # Architecture options
+        'conv_type': 'GIN',  # 'GIN', 'GAT', 'GCN'
+        'num_layers': 2,
+        # GAT specific options
+        'gat_heads': 8,
+        'gat_concat': True,
+        # Dropout options
+        'conv_dropout': 0.1,
+        'mlp_dropout': 0.1,
+        'final_dropout': 0.2,
+        # Normalization options
+        'use_batch_norm': False,
+        'use_layer_norm': True,
+        # Residual connections
+        'use_residual': False,
+        # Pooling options
+        'pooling': 'add',  # 'mean', 'max', 'add', 'concat'
+        # MLP options
+        'mlp_layers': 2,
+        'final_mlp_layers': 2
+    }
+"""
+kwargs_network = { #pretrain_GIN_3.pt
+    # Architecture options
+    'conv_type': 'GIN',  # 'GIN', 'GAT', 'GCN'
+    'num_layers': 6,
+    # GAT specific options
+    'gat_heads': 8,
+    'gat_concat': True,
+    # Dropout options
+    'conv_dropout': 0.1,
+    'mlp_dropout': 0.1,
+    'final_dropout': 0.2,
+    # Normalization options
+    'use_batch_norm': False,
+    'use_layer_norm': True,
+    # Residual connections
+    'use_residual': True,
+    # Pooling options
+    'pooling': 'add',  # 'mean', 'max', 'add', 'concat'
+    # MLP options
+    'mlp_layers': 3,
+    'final_mlp_layers': 3
+}
+"""
 testcases = [
     {
         "start": "Base+MLP",
@@ -60,26 +105,31 @@ testcases = [
 
 
 exploration_weights = [
-    #1,
-    #5,
-    10,
-    #15,
-    #20,
+    # 2,
+    5,
+    # 10,
+    # 15,
+    # 20,
 ]
 
-gnn_oracle = OracleGNN()
-gnn_oracle.load("../models/pretrain_GAT_3.pt")
+# gnn_oracle = OracleGNN()
+# gnn_oracle.load("../models/pretrain_GAT_5.pt")
 
-# gnn_batch = OracleGNN_BATCH()
-# gnn_batch.load("../models/pretrain_GAT_3.pt")
+gnn_batch = OracleGNN(device="cpu", hidden_dim=24, **kwargs_network)
+gnn_batch.load("../models/GIN_epoch_30.pt") # GIN LEMON (agree) >>> GIN TONIC palle
+
+
+
+# gnn_batch = OracleGNN(device="cpu", hidden_dim=64, **kwargs_network)
+# gnn_batch.load("../models/pretrain_GIN_3.pt") # GIN LEMON 
 
 
 
 oracles = [
     # Oracle(),
     #OracleRND(),
-    gnn_oracle,
-    # gnn_batch,
+    # gnn_oracle,
+    gnn_batch,
 ]
 
 
@@ -118,16 +168,20 @@ def test_mcts():
                     engine = Engine()
                     engine.newgame([testcase["start"]])
                     
-                    # Run MCTS with the oracle
-                    mcts = MCTS(oracle=oracle, exploration_weight=exploration_weight, time_limit=TIME_LIMIT)
-                    mcts.run_simulation_from(engine.board, debug=False)
-                    a:str = mcts.action_selection(training=False, debug=True)
+                    # # Run MCTS with the oracle
+                    mcts = MCTS_BATCH(oracle=oracle, exploration_weight=exploration_weight, time_limit=TIME_LIMIT)
+                    
+                    # # mcts.run_simulation_from(engine.board, debug=False)
+                    # # a:str = mcts.action_selection(training=False, debug=True)
+                    
+                    a:str = mcts.calculate_best_move(engine.board, restriction="depth", value=1024, debug=True)
+                    
+                    # v, pi = oracle.predict(engine.board, debug=True)
+                    # print(f"Predicted value: {v}")
+                    # print(f"Predicted move probabilities: {pi}")
+                    # print(str(engine.board))
 
-                    v, pi = oracle.predict(engine.board)
-                    print(f"Predicted value: {v}")
-                    print(f"Predicted move probabilities: {pi}")
-
-                    #print(f"Action selected: {a}")
+                    # #print(f"Action selected: {a}")
                     engine.play(a, verbose=False)
 
                     if a in testcase["correct_moves"] or (testcase["win"] and engine.board.state != GameState.IN_PROGRESS):
@@ -138,6 +192,7 @@ def test_mcts():
 
                 log_subheader(f"Right moves: {right_moves}/{TEST_DIM}")
 
+    print_counter()
         
 def main():
     """

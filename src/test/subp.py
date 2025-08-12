@@ -1,6 +1,6 @@
 import subprocess
 import random
-from gpt import generate_match_graphs
+from test.gpt import generate_match_graphs
 import os
 
 OK = "ok\n"

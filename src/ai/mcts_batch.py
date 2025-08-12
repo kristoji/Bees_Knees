@@ -1,185 +1,374 @@
-from ai.brains import Brain
+from __future__ import annotations
 import math
-from random import choice, uniform
+from time import time
+from typing import Dict, List, Tuple, Optional
+
+import numpy as np
+import torch
+from torch_geometric.data import Data
+
+from ai.brains import Brain
+from ai.node_mcts import Node_mcts
 from engine.board import Board
 from engine.enums import GameState, PlayerColor, Error
 from engine.game import Move
-from time import time
-from ai.oracle import Oracle
-from ai.mcts import Node_mcts
+from ai.oracleGNN import OracleGNN
 
+
+# --------------------------------------------------------------
+# MCTS with batched rollouts
+# --------------------------------------------------------------
 class MCTS_BATCH(Brain):
-    "Monte Carlo tree searcher. First rollout the tree then choose a move."
+    """Monte Carlo tree searcher that performs batched neural calls.
 
-    def __init__(self, oracle: Oracle, exploration_weight: int = 10, num_rollouts: int = 1000, time_limit: float = float("inf"), debug: bool = False) -> None:
+    Differences vs your original class:
+      - Collects multiple leaf nodes per outer loop, evaluates them in batch,
+        then expands and backpropagates.
+      - Supports both rollout-limited and time-limited modes.
+    """
+
+    def __init__(self, oracle: OracleGNN, exploration_weight: int = 10, num_rollouts: int = 1024,
+                 time_limit: float = float("inf"), batch_size: int = 32, debug: bool = False) -> None:
         super().__init__()
-        self.init_node = None
-        self.init_board = None  # the board to be used for the next rollout
+        self.init_node: Optional[Node_mcts] = None
+        self.init_board: Optional[Board] = None
         self.exploration_weight = exploration_weight
         self.num_rollouts = num_rollouts
         self.oracle = oracle
         self.time_limit = time_limit
-        self.epsilon = 0.05  # small value to avoid time limit issues
+        self.batch_size = max(1, int(batch_size))
+        self.epsilon = 0.05
         self.start_time = time()
         self.debug = debug
 
-    def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
+    # -------------------------
+    #  Public API
+    # -------------------------
+    def calculate_best_move(self, board: Board, restriction: str, value: int, debug:bool = False) -> str:
         if restriction == "depth":
             self.time_limit = float("inf")  # ignore time limit
+            if debug:
+                start = time()
             self.num_rollouts = value # set max rollouts
             self.run_simulation_from(board, debug=False)
             a: str = self.action_selection(training=False)
+            if debug:
+                print(f"Time taken: {time() - start:.2f} seconds")
             return a 
         elif restriction == "time":
             self.time_limit = value # set time limit
             self.start_time = time() # set start time
             self.run_simulation_from(board, debug=False)
             a: str = self.action_selection(training=False)
+            if debug:
+                print(f"Rollouts done: {self.num_rollouts}")
             return a
         else:
             raise Error("Invalid restriction for MCTS")
 
-    def choose(self, training:bool, debug:bool = False) -> Node_mcts:
-        "Choose the best successor of node. (Choose a move in the game)"
+    def action_selection(self, training: bool = False, debug: bool = False) -> str:
+        node = self.choose(training=training, debug=debug)
+        return self.init_board.stringify_move(node.move)
+
+    def get_moves_probs(self) -> Dict[Move, float]:
+        moves_probabilities: Dict[Move, float] = {}
+        total = max(1, sum(child.N for child in self.init_node.children))
+        for child in self.init_node.children:
+            moves_probabilities[child.move] = child.N / total
+        return moves_probabilities
+
+    # -------------------------
+    #  Core MCTS (batched)
+    # -------------------------
+    def run_simulation_from(self, board: Board, debug: bool = False) -> None:
+        self.init_board = board
+        last_move = board.moves[-1] if board.moves else None
+        self.init_node = Node_mcts(last_move)
+        self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key, 0)
+
+        # Don't expand root here; it will be handled by the first batch flush if needed
+        terminal_states = 0
+        completed_rollouts = 0
+
+        pending: List[dict] = []               # collected leaves info
+        leaf_datas: List[Data] = []            # Data for leaf states
+        next_datas: List[Data] = []            # Data for next states across all leaves (for π)
+
+        def flush_batch():
+            print("FLUSHHHH", flush=True)
+            nonlocal pending, leaf_datas, next_datas, completed_rollouts
+            if not pending:
+                return
+
+            # 1) Value for leaves
+            leaf_vals = self.oracle.predict_values_batch_from_data(leaf_datas, use_sigmoid=True)
+
+            # 2) Values for next states used in π
+            if next_datas:
+                next_vals = self.oracle.predict_values_batch_from_data(next_datas, use_sigmoid=True)
+            else:
+                next_vals = []
+
+            # 3) Expand and backpropagate each leaf
+            for info, v in zip(pending, leaf_vals):
+                path_moves: List[Move] = info['path_moves']
+                node: Node_mcts = info['node']
+                move_specs: List[Tuple[str, Optional[int], Optional[float], Move]] = info['move_specs'] # ('spec_type', index, terminal_value, move)
+
+                # Build π from move_specs
+                per_move_scores: List[float] = []
+                per_moves: List[Move] = []
+                for spec_type, idx, termV, mv in move_specs:
+                    if spec_type == 'terminal':
+                        V = float(termV)
+                        score = 1 - V
+                    else:  # 'predict'
+                        V = float(next_vals[idx])
+                        score = 1 - V
+                    per_move_scores.append(score)
+                    per_moves.append(mv)                    
+
+                if per_move_scores:
+                    arr = np.array(per_move_scores, dtype=np.float32)
+                    arr = np.exp(arr - np.max(arr))
+                    arr /= np.sum(arr)
+                    pi = {m: float(p) for m, p in zip(per_moves, arr.tolist())}
+                else:
+                    pi = {}
+
+                # Reconstruct board at the leaf, expand, compute reward, backprop
+                for m in path_moves:
+                    self.init_board.safe_play(m)
+
+                # For draw terminal that we flagged earlier, node.V was set; but here node is unexplored
+                node.expand(self.init_board, v, pi)
+                reward = 1 - node.reward()
+                # self._backpropagate(node, reward)
+                self._backpropagate_non_N(node, reward)  # Update N but not W/Q
+
+                self.init_board.undo(len(path_moves))
+                completed_rollouts += 1
+
+            # reset buffers
+            pending = []
+            leaf_datas = []
+            next_datas = []
+
+        # Main loop (time-limited or rollout-limited)
+        if self.time_limit < float("inf"):
+            start = time()
+            while time() - start < self.time_limit - self.epsilon:
+                # Collect a leaf
+                collected = self._collect_leaf_for_batch()
+                if collected is None:
+                    # Tree is fully terminal
+                    break
+                if collected.get('terminal_immediate', False):
+                    # Immediately backpropagate terminal leaves (no NN call)
+                    node: Node_mcts = collected['node']
+                    reward = 1 - node.reward()
+                    self._backpropagate(node, reward)
+                    completed_rollouts += 1
+                    terminal_states += 1
+                else:
+                    pending.append(collected)
+                    leaf_datas.append(collected['leaf_data'])
+                    for spec in collected['move_specs']:
+                        if spec[0] == 'predict':
+                            # spec: ('predict', next_index_placeholder, None, move)
+                            new_idx = len(next_datas)
+                            next_datas.append(spec[1])  # here spec[1] temporarily stores Data
+                            # replace in place with ('predict', flattened_index, None, move)
+                            spec_list = list(spec)
+                            spec_list[1] = new_idx
+                            spec = tuple(spec_list)
+                        # Update back into move_specs
+                    # we need to reassign because tuples are immutable; rebuild move_specs
+                    rebuilt_specs = []
+                    for spec in collected['move_specs']:
+                        if spec[0] == 'predict' and isinstance(spec[1], Data):
+                            new_idx = len(next_datas)
+                            next_datas.append(spec[1])
+                            rebuilt_specs.append(('predict', new_idx, None, spec[3]))
+                        else:
+                            rebuilt_specs.append(spec)
+                    collected['move_specs'] = rebuilt_specs
+
+                    if len(pending) >= self.batch_size:
+                        flush_batch()
+
+            # Flush leftovers
+            flush_batch()
+        else:
+            # rollout-limited
+            target = int(self.num_rollouts)
+            while completed_rollouts < target:
+                collected = self._collect_leaf_for_batch()
+                if collected is None:
+                    break
+                if collected.get('terminal_immediate', False):
+                    node: Node_mcts = collected['node']
+                    reward = 1 - node.reward()
+                    self._backpropagate(node, reward)
+                    completed_rollouts += 1
+                    terminal_states += 1
+                else:
+                    # update N
+                    self._backpropagate_N(collected['node'])  # N is updated but not W/Q
+                    
+                    pending.append(collected)
+                    leaf_datas.append(collected['leaf_data'])
+                    rebuilt_specs = []
+                    for spec in collected['move_specs']: # per ogni tupla
+                        if spec[0] == 'predict':
+                            # sostituisci Data con l'indice nella lista next_datas
+                            new_idx = len(next_datas)
+                            next_datas.append(spec[1])  # Data
+                            rebuilt_specs.append(('predict', new_idx, None, spec[3]))
+                        else:
+                            rebuilt_specs.append(spec)
+                    collected['move_specs'] = rebuilt_specs
+
+                    if len(pending) >= self.batch_size:
+                        flush_batch()
+
+            flush_batch()
+
+        if debug:
+            print(f"\nTerminal states {terminal_states}/{completed_rollouts} rollouts")
+
+        # reflect actual count for downstream assertions
+        self.num_rollouts = completed_rollouts
+
+    # -------------------------
+    #  Selection helpers
+    # -------------------------
+    def _collect_leaf_for_batch(self) -> Optional[dict]:
+        """Walk down the tree using UCT until an unexplored or terminal node.
+        Return a dict describing what to evaluate/expand, without expanding.
+        Structure:
+            {
+              'node': Node_mcts,
+              'path_moves': List[Move],
+              'leaf_data': Data,                  # ONLY for unexplored non-terminal
+              'move_specs': List[Tuple],          # per move: ('terminal', None, V_term, move) or ('predict', Data, None, move)
+              'terminal_immediate': bool          # True when node is terminal (no expand, just backprop)
+            }
+        """
+        curr_node = self.init_node
+        curr_board = self.init_board
+        path_moves: List[Move] = []
+
+        # Descend
+        while True:
+            if curr_node.is_unexplored or curr_node.is_terminal:
+                break
+            curr_node = self._uct_select(curr_node)
+            curr_board.safe_play(curr_node.move)
+            path_moves.append(curr_node.move)
+
+        # Handle terminal
+        if curr_node.is_terminal:
+            if curr_node.V == -1:  # draw needs heuristic once
+                if curr_board.state == GameState.DRAW:
+                    v = 0.5
+                else:
+                    v = 1.0 if (
+                        (curr_board.state == GameState.WHITE_WINS and curr_board.current_player_color == PlayerColor.WHITE) or
+                        (curr_board.state == GameState.BLACK_WINS and curr_board.current_player_color == PlayerColor.BLACK)
+                    ) else 0.0
+                curr_node.V = v
+            # Undo path before returning
+            if path_moves:
+                curr_board.undo(len(path_moves))
+            return {
+                'node': curr_node,
+                'path_moves': path_moves,
+                'terminal_immediate': True,
+            }
+
+        # Unexplored case – collect Data for leaf and for each child next state
+        # Data for leaf
+        d_leaf = self.oracle._data_from_board(curr_board)
+        if d_leaf is None:
+            d_leaf = Data(x=torch.zeros((1, 13), dtype=torch.float32),
+                          edge_index=torch.zeros((2, 0), dtype=torch.long),
+                          batch=torch.zeros(1, dtype=torch.long))
+
+        move_specs: List[Tuple[str, Optional[Data], Optional[float], Move]] = []
+        valid_moves = list(curr_board.get_valid_moves())
+        for m in valid_moves:
+            curr_board.safe_play(m)
+            if curr_board.state != GameState.IN_PROGRESS:
+                if curr_board.state == GameState.DRAW:
+                    V = 0.5
+                else:
+                    V = 1.0 if (
+                        (curr_board.state == GameState.WHITE_WINS and curr_board.current_player_color == PlayerColor.WHITE) or
+                        (curr_board.state == GameState.BLACK_WINS and curr_board.current_player_color == PlayerColor.BLACK)
+                    ) else 0.0
+                move_specs.append(('terminal', None, float(V), m))
+            else:
+                d_next = self.oracle._data_from_board(curr_board)
+                if d_next is None:
+                    move_specs.append(('terminal', None, 0.5, m))
+                else:
+                    move_specs.append(('predict', d_next, None, m))
+            curr_board.undo()
+
+        # Undo path before returning
+        if path_moves:
+            curr_board.undo(len(path_moves))
+
+        return {
+            'node': curr_node,
+            'path_moves': path_moves,
+            'leaf_data': d_leaf,
+            'move_specs': move_specs,
+            'terminal_immediate': False,
+        }
+
+    def _backpropagate(self, leaf: Node_mcts, reward: float) -> None:
+        while leaf is not None:
+            leaf.N += 1
+            leaf.W += reward
+            leaf.Q = leaf.W / leaf.N
+            reward = 1 - reward
+            leaf = leaf.parent
+
+    def _backpropagate_N(self, leaf: Node_mcts) -> None:
+        """Backpropagate reward to the leaf and its ancestors, updating N."""
+        while leaf is not None:
+            leaf.N += 1
+            leaf = leaf.parent
+
+    def _backpropagate_non_N(self, leaf: Node_mcts, reward: float) -> None:
+        """Backpropagate reward to the leaf and its ancestors, but do not update N."""
+        while leaf is not None:
+            leaf.W += reward
+            leaf.Q = leaf.W / leaf.N
+            reward = 1 - reward
+            leaf = leaf.parent
+
+    def _uct_select(self, node: Node_mcts) -> Node_mcts:
+        sqrt_N_vertex = math.sqrt(max(1, node.N))
+        def uct(n: Node_mcts) -> float:
+            return n.Q + self.exploration_weight * n.P * sqrt_N_vertex / (1 + n.N)
+        return max(node.children, key=uct)
+
+    def choose(self, training: bool, debug: bool = False) -> Node_mcts:
         if debug:
             print("\n\nChildren of root node (sorted by visits):\n")
             for child in sorted(self.init_node.children, key=lambda x: x.N, reverse=True):
                 print(f"Move: {self.init_board.stringify_move(child.move)} -> N = {child.N}, W = {child.W}, Q = {child.Q}, P = {child.P}, V = {child.V}")
         if training:
-            # assert self.init_node.N == self.num_rollouts, "The number of rollouts must be equal to the number of visits to the root node."
-            # print( sum([child.N for child in self.init_node.children]))
-            # print(self.init_node.N)
-            assert sum([child.N for child in self.init_node.children]) == self.num_rollouts
-            rnd = uniform(0, 1)
+            total = max(1, sum(child.N for child in self.init_node.children))
+            rnd = np.random.rand()
+            acc = 0.0
             for child in self.init_node.children:
-                if rnd <= (portion := child.N / self.num_rollouts):
+                acc += child.N / total
+                if rnd <= acc:
                     return child
-                rnd -= portion
-            raise Error(str(rnd) + " - No child selected in MCTS.choose()")
+            return self.init_node.children[-1]
         else:
-            def score(n: Node_mcts) -> float:
-                "Score function for the node. Higher is better."
-                return n.N 
-            # TODO: shuffle children with same best score
-            return max(self.init_node.children, key=score)
-        
-        
-    def do_rollout(self) -> None:
-        "Make the tree one layer better. (Train for one iteration.)"
-        leaf = self._select_and_expand()
-
-        reward = 1 - leaf.reward()      # perché ci interessa vedere i valori di Q e W dal padre (che ha colore opposto)
-        
-        self._backpropagate(leaf, reward)
-
-        return leaf.is_terminal
-        
-
-    def _select_and_expand(self) -> Node_mcts:
-        "Find an unexplored descendent of `node`"
-        curr_node = self.init_node
-    
-        curr_board = self.init_board
-        
-        number_of_moves = 0
-    
-        while True:
-
-            if curr_node.is_unexplored or curr_node.is_terminal:
-                break
-            
-            curr_node = self._uct_select(curr_node)  # descend a layer deeper
-            
-            # Aggiorno la curr_board giocando la mossa scelta
-            curr_board.safe_play(curr_node.move)
-            number_of_moves += 1
-        
-
-        if curr_node.is_terminal and curr_node.V == -1:
-            # compute the heuristic (only once) IF DRAW because, when calling the reward function, we want to avoid the DRAW if winning
-            v = self.oracle.compute_heuristic(curr_board)
-            curr_node.V = v
-
-        # expand di curr_node (non può essere terminale)
-        elif curr_node.is_unexplored:
-            v, pi = self.oracle.predict(curr_board)
-            curr_node.expand(curr_board, v, pi)
-
-        if number_of_moves:
-            curr_board.undo(number_of_moves)
-
-        return curr_node
-
-    def _backpropagate(self, leaf: Node_mcts, reward: float) -> None:
-        "Send the reward back up to the ancestors of the leaf"
-        while leaf is not None:
-            leaf.N += 1
-            leaf.W += reward
-            leaf.Q = leaf.W / leaf.N
-            reward = 1 - reward # TODO: invece di tenere V in [0,1], tenerlo in [-inf, inf] e fare reward = -reward
-            leaf = leaf.parent
-            
-    def _uct_select(self, node: Node_mcts) -> Node_mcts:
-        "Select a child of node, balancing exploration & exploitation"
-
-        sqrt_N_vertex = math.sqrt(node.N)
-        def uct_Norels(n:Node_mcts) -> float:
-            return n.Q + self.exploration_weight * n.P * sqrt_N_vertex / (1 + n.N) #----> FIXED EXPL WEIGHT
-            #return n.Q + (1 + (time() - self.start_time) / self.time_limit *(self.exploration_weight - 1)) * n.P * sqrt_N_vertex / (1 + n.N) # -----> LINEAR EXPL WEIGHT DURING TURN (NO SENSE)
-
-        return max(node.children, key=uct_Norels)
-
-    def run_simulation_from(self, board: Board, debug: bool=False) -> None:
-        self.init_board = board
-        last_move = board.moves[-1] if board.moves else None
-        self.init_node = Node_mcts(last_move)
-
-        self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key, 0)
-        self._select_and_expand() # expand the root node without updating N (in order to get root.N = sum(children.N))
-
-        # if you can only do one move, return it
-        if len(self.init_node.children) == 1:
-            return
-
-        terminal_states = 0
-
-        if self.time_limit < float("inf"):
-            self.num_rollouts = 0
-            start_time = time()
-            while time() - start_time < self.time_limit - self.epsilon:
-                if self.do_rollout() and debug: # return true if new leaf is terminal
-                    terminal_states += 1
-                self.num_rollouts += 1
-        else:
-            if debug:
-                for _ in tqdm(range(self.num_rollouts), desc="Rollouts", unit="rollout"):
-                    if self.do_rollout() and debug: # return true if new leaf is terminal
-                        terminal_states += 1
-            else:
-                for _ in range(self.num_rollouts):
-                    if self.do_rollout() and debug: # return true if new leaf is terminal
-                        terminal_states += 1
-        
-        if debug:
-            print(f"\nTerminal states {terminal_states}/{self.num_rollouts} rollouts")
-
-    def action_selection(self, training=False, debug:bool = False) -> str:
-        # , board: Board
-        # assert board == self.init_board
-        node = self.choose(training=training, debug=debug)
-        return self.init_board.stringify_move(node.move)
-        
-
-    def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
-        self.run_simulation_from(board)
-        return self.action_selection(debug=self.debug)
-
-    def get_moves_probs(self) -> dict[Move, float]:
-        #, board:Board
-        # assert board == self.init_board
-        
-        moves_probabilities = {}
-        for child in self.init_node.children:
-            moves_probabilities[child.move] = child.N / self.num_rollouts
-
-        return moves_probabilities
+            return max(self.init_node.children, key=lambda n: n.N)

@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 
 import numpy as np
 import networkx as nx
-from ai.training import Training
 from engine.enums import GameState
 from engine.board import Board
 from engineer import Engine
@@ -19,6 +18,14 @@ PRO_MATCHES_FOLDER = "/content/drive/My Drive/Ortogonale/Hive_DB/tournament"
 GAME_TO_PARSE = 1000
 PLOTS = False
 DEST_FOLDER = f"/content/drive/My Drive/Ortogonale/Hive_DB-GRAPH/"
+
+
+SIZE: int = 28
+LAYERS: int = 5
+CENTER: int = SIZE // 2 - 1
+# NUM_PIECES: int = BugName.NumPieceNames.value
+NUM_PIECES: int = 28
+INPUT_SHAPE: tuple[int, int, int] = (NUM_PIECES * LAYERS, SIZE, SIZE)
 
 def log_header(title: str, width: int = 60, char: str = '='):
     bar = char * width
@@ -193,7 +200,7 @@ def board_to_graph(board: Board) -> tuple[list[list[float]], list[list[int]], di
             raise ValueError(f"Position {pos} is None, cannot add edges for non-placed bugs.")
         i = node_index[(pos,h)]
         for d in Direction.flat():
-            npos = board._get_neighbor(pos,d)
+            npos = pos.get_neighbor(d)
             j = node_index.get((npos,h))
             if j is not None:
                 G.add_edge(i,j)
@@ -316,7 +323,7 @@ def board_to_simple_honored_graph(board: Board) -> tuple[list[list[float]], list
             raise ValueError(f"Position {pos} is None, cannot add edges for non-placed bugs.")
         i = node_index[(pos,h)]
         for d in Direction.flat():
-            npos = board._get_neighbor(pos,d)
+            npos = pos.get_neighbor(d)
             j = node_index.get((npos,h))
             if j is not None:
                 G.add_edge(i,j)
@@ -467,14 +474,14 @@ def save_simple_honored_graph(move_idx: int, board: Board, save_dir: str):
 
 def save_matrices(T_game, T_values, game, save_dir):
 
-    game_shape = (0, *Training.INPUT_SHAPE)
+    game_shape = (0, *INPUT_SHAPE)
     in_mats = np.empty(game_shape, dtype=np.float32)
     out_mats = np.empty(game_shape, dtype=np.float32)
     values = np.array(T_values, dtype=np.float32)
     for i, (in_mat, out_mat) in enumerate(T_game):
         try:
-            in_mats = np.append(in_mats, np.array(in_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
-            out_mats = np.append(out_mats, np.array(out_mat, dtype=np.float32).reshape((1,) + Training.INPUT_SHAPE), axis=0)
+            in_mats = np.append(in_mats, np.array(in_mat, dtype=np.float32).reshape((1,) + INPUT_SHAPE), axis=0)
+            out_mats = np.append(out_mats, np.array(out_mat, dtype=np.float32).reshape((1,) + INPUT_SHAPE), axis=0)
         except Exception as e:
             print(f"Index: {i}/{len(T_game)}")
     
@@ -542,11 +549,11 @@ def generate_matches(source_folder: str, verbose: bool = False, want_matrices: b
                     #save_graph(move_idx, pi_entry, engine.board, game_dir)
                     save_simple_honored_graph(saved_turns, engine.board, game_dir)
 
-                # collect matrices
-                if want_matrices:
-                    mats = Training.get_matrices_from_board(engine.board, pi)
-                    T_game += mats
-                    T_values += [value] * len(mats)
+                # # collect matrices
+                # if want_matrices:
+                #     mats = get_matrices_from_board(engine.board, pi)
+                #     T_game += mats
+                #     T_values += [value] * len(mats)
 
                 v_values.append(value)
 

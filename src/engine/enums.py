@@ -177,7 +177,8 @@ class Direction(StrEnum):
 
     @classmethod
     def flat(cls) -> list["Direction"]:
-        return [d for d in cls if d not in (cls.ABOVE, cls.BELOW)]
+        # return [d for d in cls if d not in (cls.ABOVE, cls.BELOW)]
+        return [Direction.RIGHT, Direction.UP_RIGHT, Direction.UP_LEFT, Direction.LEFT, Direction.DOWN_LEFT, Direction.DOWN_RIGHT]
 
     @classmethod
     def flat_left(cls) -> list["Direction"]:
@@ -191,26 +192,85 @@ class Direction(StrEnum):
         return self.replace("|", "")
 
     @property
-    def opposite(self) -> "Direction":
-        if self in (Direction.BELOW, Direction.ABOVE):
-            return list(Direction)[(self.delta_index - 5) % 2 + 6]
-        return list(Direction)[(self.delta_index + 3) % 6]
+    def opposite(self) -> "Direction":    
+        match self:
+            case Direction.RIGHT:
+                return Direction.LEFT
+            case Direction.UP_RIGHT:
+                return Direction.DOWN_LEFT
+            case Direction.UP_LEFT:
+                return Direction.DOWN_RIGHT
+            case Direction.LEFT:
+                return Direction.RIGHT
+            case Direction.DOWN_LEFT:
+                return Direction.UP_RIGHT
+            case Direction.DOWN_RIGHT:
+                return Direction.UP_LEFT
+            case Direction.BELOW:
+                return Direction.ABOVE
+            case Direction.ABOVE:
+                return Direction.BELOW
 
     @property
     def left_of(self) -> "Direction":
-        if self in (Direction.BELOW, Direction.ABOVE):
-            return self
-        return list(Direction)[(self.delta_index + 1) % 6]
+        match self:
+            case Direction.RIGHT:
+                return Direction.UP_RIGHT
+            case Direction.UP_RIGHT:
+                return Direction.UP_LEFT
+            case Direction.UP_LEFT:
+                return Direction.LEFT
+            case Direction.LEFT:
+                return Direction.DOWN_LEFT
+            case Direction.DOWN_LEFT:
+                return Direction.DOWN_RIGHT
+            case Direction.DOWN_RIGHT:
+                return Direction.RIGHT
+            case Direction.BELOW:
+                return Direction.BELOW
+            case Direction.ABOVE:
+                return Direction.ABOVE
 
     @property
     def right_of(self) -> "Direction":
-        if self in (Direction.BELOW, Direction.ABOVE):
-            return self
-        return list(Direction)[(self.delta_index + 5) % 6]
+        match self:
+            case Direction.RIGHT:
+                return Direction.DOWN_RIGHT
+            case Direction.UP_RIGHT:
+                return Direction.RIGHT
+            case Direction.UP_LEFT:
+                return Direction.UP_RIGHT
+            case Direction.LEFT:
+                return Direction.UP_LEFT
+            case Direction.DOWN_LEFT:
+                return Direction.LEFT
+            case Direction.DOWN_RIGHT:
+                return Direction.DOWN_LEFT
+            case Direction.BELOW:
+                return Direction.BELOW
+            case Direction.ABOVE:
+                return Direction.ABOVE
 
     @property
     def delta_index(self) -> int:
-        return list(Direction).index(self)
+        match self:
+            case Direction.RIGHT:
+                return 0
+            case Direction.UP_RIGHT:
+                return 1
+            case Direction.UP_LEFT:
+                return 2
+            case Direction.LEFT:
+                return 3
+            case Direction.DOWN_LEFT:
+                return 4
+            case Direction.DOWN_RIGHT:
+                return 5
+            case Direction.BELOW:
+                return 6
+            case Direction.ABOVE:
+                return 7
+        raise ValueError(f"Invalid direction: {self}")
 
     @property
     def is_right(self) -> bool:

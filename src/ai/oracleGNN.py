@@ -1,22 +1,18 @@
 from engine.board import Board
 from engine.game import Move
-from typing import Dict
+from typing import Dict, Optional, List, Tuple
 import numpy as np
 import torch
-from torch_geometric.data import Data
-from ai.graph_honored_network import GraphClassifier
-from ai.improved_honored_GNN import GraphClassifierImproved
-from ai.training import Training
+from torch_geometric.data import Data, Batch
+from ai.graph_network import GraphClassifier
 from ai.oracle import Oracle
 from ai.loader import GraphDataset
-from gpt import board_to_simple_honored_graph
-from engineer import Engine
+from engine.enums import BugType, Direction
+from collections import defaultdict
 from ai.log_utils import log_header, log_subheader
 import os
-from ai.brains import MCTS
 from engine.enums import GameState, PlayerColor
-from gpt import save_simple_honored_graph
-import json
+
 
 SHORT = 50
 LONG = 100
@@ -27,16 +23,28 @@ class OracleGNN(Oracle):
     """
     Oracle that uses a neural network to predict the value and policy of a board state.
     """
-    def __init__(self):
-        #self.network = GraphClassifier(in_dim=13, hidden_dim=64, num_classes=1)
-
-        self.device = torch.device(os.environ.get("TORCH_DEVICE", "cpu"))
-        self.kwargs_network = {
-            'conv_type': 'GAT'  # 'GIN', 'GAT', 'GCN'
-        }
-        self.network = GraphClassifierImproved(in_dim=13, hidden_dim=64, num_classes=1, **self.kwargs_network)
+    def __init__(self, device: Optional[str] = None, hidden_dim: int = 64, **kwargs_network) -> None:
+        # self.device = torch.device(torch.environ.get("TORCH_DEVICE", "cpu")) if hasattr(torch, 'environ') else torch.device("cpu")
+        # device to gpu
+        self.device = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.kwargs_network = kwargs_network
+        self.network = GraphClassifier(in_dim=13, hidden_dim=hidden_dim, num_classes=1, **self.kwargs_network)
         self.network.to(self.device)
         self.cache: Dict[int, float] = {}
+        self.path: Optional[str] = None
+        self.pin = (self.device.type == "cuda")
+
+        if self.device.type == 'cpu':
+            os.environ["OMP_NUM_THREADS"] = "8"     # scegli in base ai core fisici
+            os.environ["MKL_NUM_THREADS"] = "8"
+            torch.set_num_threads(8)
+            torch.set_num_interop_threads(1)        # evita oversubscription
+            
+        try:
+            self.network = torch.compile(self.network, mode="reduce-overhead")  # or "reduce-overhead"
+        except Exception:
+            print("sei ghey, torch.compile not supported on this device")
+            pass  # fall back if PyG op not supported
         
     def training(self, train_data_path:str, epochs:int) -> None:
         """
@@ -44,6 +52,9 @@ class OracleGNN(Oracle):
         T is a tuple of (in_mats, out_mats, values)
         """
         self.path = train_data_path
+
+        log_header(f"STARTING DATA LOADING")
+
         self.train_loader =  GraphDataset(folder_path=self.path) # ------------> DA METTERE co dataloader
 
         if not self.network:
@@ -53,11 +64,16 @@ class OracleGNN(Oracle):
             print(f"Pre-loading dataset to GPU: {self.device}")
             self.train_loader = self._preload_to_gpu(self.train_loader)
         
-        batch_size = 128
-        self.train_loader = self.train_loader.get_dataloader(batch_size=batch_size, shuffle=True, num_workers=0)
+        batch_size = 1024 #128
+        if self.device.type == 'cuda':
+            self.train_loader = self.train_loader.get_dataloader(batch_size=batch_size, shuffle=True, num_workers=0)
+        else: #if we are on CPU
+            self.train_loader = self.train_loader.get_dataloader(batch_size=batch_size, shuffle=True, num_workers=6, pin_memory=True, persistent_workers=True, prefetch_factor=4)
 
         if not self.network:
             raise ValueError("Neural network is not initialized.")
+        log_subheader("Data loading ended!")
+        log_header("STARTING PRE-TRAINING")
         self.network.train_network(
             train_loader=self.train_loader,
             epochs=epochs,
@@ -88,226 +104,248 @@ class OracleGNN(Oracle):
         """
         Create a copy of the Oracle instance.
         """
+        #TODO: probabilmente sbagliata!!!
         if not self.path:
             # self.save("temp.pth") # save in a temp file just to perform the copy
             raise ValueError("Path is not set. Cannot copy without a path.")
         new_oracle = OracleGNN()
         new_oracle.network.load(self.path) 
         return new_oracle
-    
-    def compute_heuristic(self, board: Board, game: bool = True) -> float:
-        if board.state != GameState.IN_PROGRESS:
-            if board.state == GameState.DRAW:
-                v = 0.5
-            else:
-                v = 1.0 if (board.state == GameState.WHITE_WINS and board.current_player_color == PlayerColor.WHITE) or (board.state == GameState.BLACK_WINS and board.current_player_color == PlayerColor.BLACK) else 0.0
-        else:
-            # v, _ = self.predict(board)    
-
-            x, edge_index, pos_bug_to_index = board_to_simple_honored_graph(board)
-
-            x = self.flatten_nodes(x)
-            # Create PyTorch Geometric Data object
-            data = Data(
-                x = torch.tensor(x, dtype=torch.float),
-                edge_index=torch.tensor(edge_index, dtype=torch.long).contiguous(),
-                batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph        
-                )
-            data = data.to(self.device)  # Move to the correct device
-            v = self.network.predict(data, use_sigmoid=True) # PREDICT THE STATE  
-            v = self._to_float(v)
-            # assert type(v) is float, f"Expected v to be float, got {type(v)}"
-            # [INVERTED NET]
-            v = 1 - v  
-                  
-
-        return v
-    
-    def flatten_nodes(self, x):
-        temp = []
+   
+    # -------------------------
+    #  Helpers
+    # -------------------------
+    def flatten_nodes(self, x: List[List[float]]) -> List[List[float]]:
+        temp: List[List[float]] = []
         for el in x:
-            flattened = []
+            flattened: List[float] = []
             for sub_el in el:
                 if isinstance(sub_el, list):
-                    flattened.extend(sub_el)  # More efficient than iterating
+                    flattened.extend(sub_el)
                 else:
                     flattened.append(sub_el)
             temp.append(flattened)
         return temp
 
-    def _to_float(self, x):
-
+    def _to_float(self, x) -> float:
         if isinstance(x, torch.Tensor):
-            # detach -> cpu -> squeeze -> item
-            if x.numel() == 1:
-                return float(x.detach().cpu().item())
             return float(x.detach().cpu().view(-1)[0].item())
         if isinstance(x, np.ndarray):
-            if x.size == 1:
-                return float(x.squeeze())
             return float(x.reshape(-1)[0])
         return float(x)
 
-    def predict(self, board: Board, game: bool = True) -> tuple[float, Dict[Move, float]]:
+    @torch.no_grad()
+    def predict_values_batch_from_data(self, data_list, use_sigmoid=True):
+        if not data_list: return []
+        batch_cpu = Batch.from_data_list(data_list)
+        if self.device.type == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            batch = batch_cpu.to(self.device, non_blocking=True)
+            with torch.autocast(dtype=amp_dtype):
+                out = self.network.predict(batch, use_sigmoid=use_sigmoid)
+        else:
+            out = self.network.predict(batch_cpu, use_sigmoid=use_sigmoid)
+        return out.detach().cpu().view(-1).tolist() if isinstance(out, torch.Tensor) \
+            else np.asarray(out).reshape(-1).tolist()
+    
+
+    @torch.no_grad()
+    def predict_values_batch_from_data_with_gpu(self, data_list, use_sigmoid: bool = True):
+        if not data_list:
+            return []
+
+        # Build Batch on CPU first (fast), then move in one shot
+        batch = Batch.from_data_list(data_list)
+
+        if self.device.type == "cuda":
+            # allow TF32 on Ampere+; good speed, same or near-same accuracy
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
+            # autocast: prefer bf16 (more robust) if supported; else fp16
+            amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
+            # Non-blocking copy: effective if tensors were allocated in pinned memory
+            batch = batch.to(self.device, non_blocking=True)
+
+            with torch.cuda.amp.autocast(dtype=amp_dtype):
+                out = self.network.predict(batch, use_sigmoid=use_sigmoid)
+        else:
+            out = self.network.predict(batch, use_sigmoid=use_sigmoid)
+
+        if isinstance(out, torch.Tensor):
+            vals = out.detach().cpu().view(-1).tolist()
+        else:
+            vals = np.asarray(out).reshape(-1).tolist()
+        return [float(v) for v in vals]
+
+
+    # Keep single-item API for backwards compatibility
+    def compute_heuristic(self, board: Board, game: bool = True) -> float:
+        if board.state != GameState.IN_PROGRESS:
+            if board.state == GameState.DRAW:
+                v = 0.5
+            else:
+                v = 1.0 if (
+                    (board.state == GameState.WHITE_WINS and board.current_player_color == PlayerColor.WHITE) or
+                    (board.state == GameState.BLACK_WINS and board.current_player_color == PlayerColor.BLACK)
+                ) else 0.0
+        else:
+            d = self._data_from_board(board)
+            if d is None:
+                v = 0.5
+            else:
+                v = self.predict_values_batch_from_data([d], use_sigmoid=True)[0]
+            v = self._to_float(v)  # convert to float
+            # v = 1 - v  # inverted net
+        return v
+
+    def predict(self, board: Board, game: bool = True) -> Tuple[float, Dict[Move, float]]:
+        """Single-state path kept for compatibility; internally uses batch helpers.
+        This still computes π by looking one ply ahead (batched under the hood).
         """
-        Predict the value and policy for the given board state.
-        """
-
-        # TODO : convert the board into a graph representation
-        x, edge_index, pos_bug_to_index = board_to_simple_honored_graph(board)
-
-        x = self.flatten_nodes(x)
-
-        # Skip empty graphs -.--> TODO: we can do better?????
-        if len(x) == 0:
+        # Value for the leaf
+        d_leaf = self._data_from_board(board)
+        print(d_leaf.x, d_leaf.edge_index, d_leaf.batch)
+        if d_leaf is None:
             v = 0.5
         else:
-            # Create PyTorch Geometric Data object
-            data = Data(
-                x = torch.tensor(x, dtype=torch.float),
-                edge_index=torch.tensor(edge_index, dtype=torch.long).contiguous(),
-                batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph        
-                )
-            data = data.to(self.device)  # Move to the correct device
-            
-            if not self.cache.get(board.zobrist_key, None):
-                v = self.network.predict(data, use_sigmoid=True) # PREDICT THE STATE
-                v = self._to_float(v)
-                self.cache[board.zobrist_key] = v
-            else:
-                v = self.cache[board.zobrist_key]
+            v = self.predict_values_batch_from_data([d_leaf], use_sigmoid=True)[0]
+        v = self._to_float(v)
+        #v = 1 - self._to_float(v)  # inverted net
 
-        assert type(v) is float, f"Expected v to be float, got {type(v)}"
-        # [INVERTED NET]
-        v = 1-v
-
+        # Policy via one-ply lookahead
+        pi: Dict[Move, float] = {}
         valid_moves = list(board.get_valid_moves())
-        pi = {}
+        next_datas: List[Data] = []
+        map_indices: List[Tuple[int, Optional[float]]] = []  # (idx in next_datas or -1, terminal V if any)
 
         for m in valid_moves:
-            
-            board.safe_play(m) # safe to optimize
-
+            board.safe_play(m)
             if board.state != GameState.IN_PROGRESS:
                 if board.state == GameState.DRAW:
                     V = 0.5
                 else:
-                    V = 1.0 if (board.state == GameState.WHITE_WINS and board.current_player_color == PlayerColor.WHITE) or (board.state == GameState.BLACK_WINS and board.current_player_color == PlayerColor.BLACK) else 0.0
-
-
-                # V = torch.tensor([V], dtype=torch.float32, device=self.device)  # Ensure V is a tensor with Size 1
+                    V = 1.0 if (
+                        (board.state == GameState.WHITE_WINS and board.current_player_color == PlayerColor.WHITE) or
+                        (board.state == GameState.BLACK_WINS and board.current_player_color == PlayerColor.BLACK)
+                    ) else 0.0
+                map_indices.append((-1, float(V)))
             else:
-                x, edge_index, pos_bug_to_index = board_to_simple_honored_graph(board)
-                x = self.flatten_nodes(x)
-                data = Data(
-                    x=torch.tensor(x, dtype=torch.float32),
-                    edge_index=torch.tensor(edge_index, dtype=torch.long).contiguous(),
-                    batch=torch.zeros(len(x), dtype=torch.long)  # Fixed: should be zeros for single graph            
-                    )
-                data = data.to(self.device)  # Move to the correct device
-
-                if not self.cache.get(board.zobrist_key, None):
-                    V = self.network.predict(data, use_sigmoid=True)    # PREDICT THE STATE
-                    V = self._to_float(V)
-                    self.cache[board.zobrist_key] = V
-
+                d = self._data_from_board(board)
+                if d is None:
+                    map_indices.append((-1, 0.5))
                 else:
-                    V = self.cache[board.zobrist_key]
-
-                V = 1 - V # [INVERTED NET]
-
-            assert type(V) is float, f"Expected V to be float, got {type(V)}"
-            pi[m] = 1 - V
-
+                    map_indices.append((len(next_datas), None))
+                    next_datas.append(d)
             board.undo()
-            
-        # Softmax the probabilities
-        if pi:
 
-            probs = np.array(list(pi.values()))
-            probs = np.exp(probs - np.max(probs))
-            probs /= np.sum(probs)
-            pi = {move: prob for move, prob in zip(pi.keys(), probs)}
+        if next_datas:
+            preds = self.predict_values_batch_from_data(next_datas, use_sigmoid=True)
         else:
-            pi={}
-            #raise ValueError("No valid moves found in the board state.")
+            preds = []
 
-        if game and isinstance(v, torch.Tensor):
-            v = v.detach().cpu().numpy()
-            # Convert all pi tensor values to numpy
-            pi = {move: prob.cpu().numpy() if isinstance(prob, torch.Tensor) else prob for move, prob in pi.items()} # TODO: prob()..() [0] ! prendere solo il val, non il ndarr
-
-        return v, pi
-    
-    def generate_matches(self, iteration_folder: str, n_games: int = 500, n_rollouts: int = 1500, verbose: bool = False, perc_allowed_draws: float = float('inf')) -> None:
-
-        engine = Engine()
-        os.makedirs(iteration_folder, exist_ok=True)
-
-        game = 1
-        draw = 0
-        wins = 0
-        discarded = 0
-
-        while game < n_games:
-
-            log_header(f"Game {game} of {n_games}: {draw}/{wins} [D/W] - Discarded: {discarded}", width=70)
-
-            T_game = []
-            v_values = []
-
-            engine.newgame(["Base+MLP"])
-            s = engine.board
-            mcts_game = MCTS(oracle=self, num_rollouts=n_rollouts)
-            winner = None
-
-            game_folder = os.makedirs(iteration_folder+f"/game_{game}/", exist_ok=True)
-
-            turn = 1
-            value = 1.0
-
-            while not winner and num_moves <= TURN_LIMIT:
-
-                mcts_game.run_simulation_from(s, debug=False)
-
-                save_simple_honored_graph(move_idx=turn, board=s, save_dir=game_folder)
-
-                v_values.append(value)
-                value *= -1.0
-
-                a: str = mcts_game.action_selection(training=True)
-
-                engine.play(a, verbose=verbose)
-
-                winner: GameState = engine.board.state != GameState.IN_PROGRESS
-
-                num_moves += 1
-
-            if engine.board.state == GameState.DRAW:
-                draw += 1
-                if draw > 2 * (perc_allowed_draws * n_games):
-                    break
-                if draw > perc_allowed_draws * n_games:
-                    continue
+        # Assemble π
+        probs: List[float] = []
+        for idx, termV in map_indices:
+            if idx == -1:
+                V = termV
             else:
-                wins += 1
+                V = float(preds[idx])
+                # V = 1 - V  # inverted net for next state
+            probs.append(1 - float(V))
+        if probs:
+            arr = np.array(probs, dtype=np.float32)
+            arr = np.exp(arr - np.max(arr))
+            arr /= np.sum(arr)
+            pi = {m: float(p) for m, p in zip(valid_moves, arr.tolist())}
+        return v, pi
 
-            log_subheader(f"Game {game} finished with state {engine.board.state.name}")
+    # Alternative: If you still need the separate functions for compatibility
+    def _data_from_board(self, board: Board) -> Optional[Data]:
+        """
+        Even faster version using numpy throughout and minimal Python loops.
+        """
+        pos_to_bug = board._pos_to_bug
+        if not pos_to_bug:
+            return None
+        
+        # Count total nodes first
+        total_nodes = sum(len(bugs) for bugs in pos_to_bug.values())
+        if total_nodes == 0:
+            return None
+        
+        # Setup
+        types = list(BugType)
+        type_to_index = {bug_type: (i + 1) for i, bug_type in enumerate(types)}
+        num_features = 1 + len(types) + 1 + 3  # color + one-hot type + pinned + pinning + art
+        
+        # Pre-allocate feature matrix
+        x = np.zeros((total_nodes, num_features), dtype=np.float32)
+        
+        # Tracking
+        pos_bug_to_index = {}
+        pos_height_to_idx = {}
+        current_player = board.current_player_color
+        art_pos_set = board._art_pos
+        
+        # Build nodes with vectorized operations where possible
+        node_idx = 0
+        for pos, bugs in pos_to_bug.items():
+            is_art = pos in art_pos_set
+            num_bugs = len(bugs)
+            
+            for h, bug in enumerate(bugs):
+                # Set features directly in pre-allocated array
+                x[node_idx, 0] = 1.0 if bug.color == current_player else 0.0
+                x[node_idx, 1 + type_to_index[bug.type]] = 1.0
+                x[node_idx, -3] = 1.0 if h < num_bugs - 1 else 0.0  # pinned
+                x[node_idx, -2] = 1.0 if h > 0 else 0.0  # pinning
+                x[node_idx, -1] = 1.0 if h == 0 and is_art else 0.0  # articulation
+                
+                pos_bug_to_index[(pos, bug)] = node_idx
+                pos_height_to_idx[(pos, h)] = node_idx
+                node_idx += 1
+        
+        # Build edges using numpy for better performance
+        edge_list = []
+        
+        # Flat edges - batch process by height
+        by_height = defaultdict(dict)
+        for (pos, h), idx in pos_height_to_idx.items():
+            by_height[h][pos] = idx
+        
+        for h, pos_map in by_height.items():
+            for pos, i in pos_map.items():
+                for d in Direction.flat():
+                    npos = pos.get_neighbor(d)
+                    if npos in pos_map:
+                        edge_list.append((i, pos_map[npos]))
+        
+        # Vertical edges
+        for pos, bugs in pos_to_bug.items():
+            for h in range(len(bugs) - 1):
+                i = pos_height_to_idx[(pos, h)]
+                j = pos_height_to_idx[(pos, h + 1)]
+                edge_list.extend([(i, j), (j, i)])
+        
+        # Convert to tensor
+        if edge_list:
+            edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        else:
+            edge_index = torch.empty((2, 0), dtype=torch.long)
+        
+        # Apply pinning if needed
+        if self.pin:
+            x_tensor = torch.from_numpy(x).pin_memory()
+            edge_index = edge_index.pin_memory()
+            batch = torch.zeros(total_nodes, dtype=torch.long).pin_memory()
+        else:
+            x_tensor = torch.from_numpy(x)
+            batch = torch.zeros(total_nodes, dtype=torch.long)
+        # return x_tensor, edge_index, batch
+        return Data(x=x_tensor, edge_index=edge_index, batch=batch)
+    
 
-            final_value: float = 1.0 if engine.board.state == GameState.WHITE_WINS else -1.0 if engine.board.state == GameState.BLACK_WINS else 0.0
-
-            v_values = [v * final_value for v in v_values]
-
-            # for each json in game_dir, add the value
-            for json_file in os.listdir(game_folder):
-                if json_file.endswith('.json'):
-                    json_path = os.path.join(game_folder, json_file)
-                    with open(json_path, 'r') as f:
-                        graph_data = json.load(f)
-            #         # graph_data['v'] = v_values[int(json_file.split('_')[2].split('.')[0])]
-                    #print(int(json_file.split('_')[1].split('.')[0])-1)
-                    graph_data['v'] = v_values[int(json_file.split('_')[1].split('.')[0])-1]
-                    with open(json_path, 'w') as f:
-                        json.dump(graph_data, f)
-
-            game += 1

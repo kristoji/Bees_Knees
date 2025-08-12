@@ -5,22 +5,11 @@ from engine.hash import ZobristHash
 from engine.game import Position, Bug, Move
 from typing import Final, Optional, Set
 from engine.enums import GameType, GameState, PlayerColor, BugName, BugType, Direction, Error, InvalidMoveError
-
+import inspect
 
 class Board():
-    ORIGIN: Final[Position] = Position(0, 0)
-    NEIGHBOR_DELTAS: Final[
-        dict[Direction, Position]
-    ] = {
-        Direction.RIGHT: Position(1, 0),
-        Direction.UP_RIGHT: Position(1, -1),
-        Direction.UP_LEFT: Position(0, -1),
-        Direction.LEFT: Position(-1, 0),
-        Direction.DOWN_LEFT: Position(-1, 1),
-        Direction.DOWN_RIGHT: Position(0, 1),
-        Direction.BELOW: Position(0, 0),
-        Direction.ABOVE: Position(0, 0),
-    }
+    # ORIGIN: Final[Position] = Position(0, 0)
+    ORIGIN: Final[Position] = Position.POSITIONS[(0, 0)]
 
     def __init__(self, gamestring: str = "") -> None:
         type_, state, turn, moves = self._parse_gamestring(gamestring)
@@ -48,6 +37,7 @@ class Board():
         self._draw_counter: dict[int, int] = defaultdict(lambda: 0)
         self._art_pos: set[Position] = set()
         self._snapshots: dict[int, set[Move]] = {}
+        self._snapshots_art_pos: dict[int, set[Position]] = {}
         self._play_initial_moves(moves)
 
     def __str__(self) -> str:
@@ -111,6 +101,8 @@ class Board():
                     self._zobrist_hash.toggle_last_moved_piece(BugName[str(move.bug)].value)
                     self._zobrist_hash.toggle_piece(BugName[str(move.bug)].value, move.destination, len(self._bugs_from_pos(move.destination)))
                 
+                self._update_cut_pos()
+
                 black_queen_surrounded = self.count_queen_neighbors(PlayerColor.BLACK) == 6
                 white_queen_surrounded = self.count_queen_neighbors(PlayerColor.WHITE) == 6
                 if black_queen_surrounded and white_queen_surrounded:
@@ -157,6 +149,7 @@ class Board():
                         self._pos_to_bug[move.origin].append(move.bug)
                         if update_hash:
                             self._zobrist_hash.toggle_piece(BugName[str(move.bug)].value, move.origin, len(self._bugs_from_pos(move.origin)))
+            self._update_cut_pos()
             if self.turn == 0:
                 self.state = GameState.NOT_STARTED
         else:
@@ -172,7 +165,7 @@ class Board():
                 relative = dest_bugs[-1]
             else:
                 for d in Direction.flat():
-                    neighbor_bugs = self._bugs_from_pos(self._get_neighbor(move.destination, d))
+                    neighbor_bugs = self._bugs_from_pos(move.destination.get_neighbor(d))
                     if neighbor_bugs and neighbor_bugs[0] != moved:
                         relative = neighbor_bugs[0]
                         direction = d.opposite
@@ -182,7 +175,11 @@ class Board():
 
 
     def _update_cut_pos(self) -> None:
-        if (graph := {pos for pos, bugs in self._pos_to_bug.items() if bugs}):
+        if self.zobrist_key in self._snapshots_art_pos:
+            new_art_pos = self._snapshots_art_pos[self.zobrist_key]
+            self._art_pos.clear()
+            self._art_pos.update(new_art_pos)
+        elif (graph := {pos for pos, bugs in self._pos_to_bug.items() if bugs}):
             new_art_pos: set[Position] = set()
             discovery_times: dict[Position, int] = {}
             low_link_values: dict[Position, int] = {}
@@ -193,7 +190,7 @@ class Board():
                 discovery_times[u] = low_link_values[u] = time[0]
                 time[0] += 1
                 children = 0
-                for v in [n for d in Direction if (n := self._get_neighbor(u, d)) in graph]:
+                for v in [n for d in Direction if (n := u.get_neighbor(d)) in graph]:
                     if v not in discovery_times:
                         parents[v] = u
                         children += 1
@@ -210,10 +207,11 @@ class Board():
             # Update current articulation positions.
             self._art_pos.clear()
             self._art_pos.update(new_art_pos)
+            self._snapshots_art_pos[self.zobrist_key] = new_art_pos
 
     def count_queen_neighbors(self, color: PlayerColor = current_player_color) -> int:
         return sum(
-            bool(self._bugs_from_pos(self._get_neighbor(queen_pos, d)))
+            bool(self._bugs_from_pos(queen_pos.get_neighbor(d)))
             for d in Direction.flat() 
         ) if (queen_pos := self._pos_from_bug(Bug(color, BugType.QUEEN_BEE))) else 0
 
@@ -255,7 +253,7 @@ class Board():
         if not self.zobrist_key in self._snapshots:
             moves = set()
             if self.state in (GameState.NOT_STARTED, GameState.IN_PROGRESS):
-                self._update_cut_pos()
+                # self._update_cut_pos()
                 for bug, pos in self._bug_to_pos.items():
                     if bug.color is self.current_player_color:
                         if self.turn == 0:
@@ -264,7 +262,7 @@ class Board():
                         elif self.turn == 1:
                             if bug.type is not BugType.QUEEN_BEE and self._can_bug_be_played(bug):
                                 moves.update(
-                                    Move(bug, None, self._get_neighbor(self.ORIGIN, d))
+                                    Move(bug, None, self.ORIGIN.get_neighbor(d))
                                     for d in Direction.flat()
                                 )
                         elif pos is None:
@@ -311,18 +309,18 @@ class Board():
             for bug, pos in self._bug_to_pos.items()
             if bug.color is color and pos and self._is_bug_on_top(bug)
             for direction in Direction.flat()
-            for neighbor in [self._get_neighbor(pos, direction)]
+            for neighbor in [pos.get_neighbor(direction)]
             if not self._bugs_from_pos(neighbor)
             and all(
-                not self._bugs_from_pos(self._get_neighbor(neighbor, d))
-                or self._bugs_from_pos(self._get_neighbor(neighbor, d))[-1].color is color
+                not self._bugs_from_pos(neighbor.get_neighbor(d))
+                or self._bugs_from_pos(neighbor.get_neighbor(d))[-1].color is color
                 for d in Direction.flat()
                 if d != direction.opposite
             )
         }
 
     def _check_no_door(self, origin: Position, position: Position, direction: Direction) -> bool:
-        return (origin in ((right := self._get_neighbor(position, direction.right_of)), (left := self._get_neighbor(position, direction.left_of)))) == (bool(self._bugs_from_pos(right)) == bool(self._bugs_from_pos(left)))
+        return (origin in ((right := position.get_neighbor(direction.right_of)), (left := position.get_neighbor(direction.left_of)))) == (bool(self._bugs_from_pos(right)) == bool(self._bugs_from_pos(left)))
 
     def _get_sliding_moves(self, bug: Bug, origin: Position, depth: int = 0) -> Set[Move]:
         
@@ -334,7 +332,7 @@ class Board():
             if unlimited_depth or current_depth == depth:
                 destinations.add(current)
             if unlimited_depth or current_depth < depth:
-                stack.update((neighbor, current_depth + 1, path | {neighbor}) for direction in Direction if (neighbor := self._get_neighbor(current, direction)) not in path and not self._bugs_from_pos(neighbor) and self._check_no_door(origin, current, direction))
+                stack.update((neighbor, current_depth + 1, path | {neighbor}) for direction in Direction if (neighbor := current.get_neighbor(direction)) not in path and not self._bugs_from_pos(neighbor) and self._check_no_door(origin, current, direction))
         return {Move(bug, origin, destination) for destination in destinations if destination != origin}
 
 
@@ -342,10 +340,10 @@ class Board():
         moves: Set[Move] = set()
         height = len(self._bugs_from_pos(origin)) - 1 + int(virtual)
         for d in Direction.flat():
-            destination = self._get_neighbor(origin, d)
+            destination = origin.get_neighbor(d)
             dest_height = len(self._bugs_from_pos(destination))
-            left_height = len(self._bugs_from_pos(self._get_neighbor(origin, d.left_of)))
-            right_height = len(self._bugs_from_pos(self._get_neighbor(origin, d.right_of)))
+            left_height = len(self._bugs_from_pos(origin.get_neighbor(d.left_of)))
+            right_height = len(self._bugs_from_pos(origin.get_neighbor(d.right_of)))
             if not ((height == 0 and dest_height == 0 and left_height == 0 and right_height == 0)
                     or (dest_height < left_height and dest_height < right_height and height < left_height and height < right_height)):
                 moves.add(Move(bug, origin, destination))
@@ -354,10 +352,10 @@ class Board():
     def _get_grasshopper_moves(self, bug: Bug, origin: Position) -> Set[Move]:
         moves: Set[Move] = set()
         for d in Direction.flat():
-            destination = self._get_neighbor(origin, d)
+            destination = origin.get_neighbor(d)
             distance = 0
             while self._bugs_from_pos(destination):
-                destination = self._get_neighbor(destination, d)
+                destination = destination.get_neighbor(d)
                 distance += 1
             if distance > 0:
                 moves.add(Move(bug, origin, destination))
@@ -369,7 +367,7 @@ class Board():
         moves: Set[Move] = set()
         bugs_copied: set[BugType] = set()
         for d in Direction.flat():
-            neighbor_pos = self._get_neighbor(origin, d)
+            neighbor_pos = origin.get_neighbor(d)
             bugs = self._bugs_from_pos(neighbor_pos)
             if bugs and (neighbor := bugs[-1]).type not in bugs_copied:
                 bugs_copied.add(neighbor.type)
@@ -410,14 +408,14 @@ class Board():
 
     def _get_pillbug_special_moves(self, origin: Position) -> Set[Move]:
         empty_positions = [
-            self._get_neighbor(origin, d)
+            origin.get_neighbor(d)
             for d in Direction.flat()
-            if not self._bugs_from_pos(self._get_neighbor(origin, d))
+            if not self._bugs_from_pos(origin.get_neighbor(d))
         ]
         moves: Set[Move] = set()
         if empty_positions:
             for d in Direction.flat():
-                source = self._get_neighbor(origin, d)
+                source = origin.get_neighbor(d)
                 bugs = self._bugs_from_pos(source)
                 if (len(bugs) == 1 
                     and self._was_not_last_moved(move_bug := bugs[-1]) 
@@ -434,7 +432,7 @@ class Board():
 
     def _can_move_without_breaking_hive(self, position: Position) -> bool:
         # # assert self._bugs_from_pos(position)
-        # neighbors = [self._bugs_from_pos(self._get_neighbor(position, d)) for d in Direction.flat()]
+        # neighbors = [self._bugs_from_pos(position.get_neighbor(d)) for d in Direction.flat()]
         # if sum(bool(neighbors[i] and not neighbors[i - 1]) for i in range(len(neighbors))) > 1:
         #     visited: set[Position] = set()
         #     # neighbors_pos = [self._pos_from_bug(bugs[-1]) for bugs in neighbors if bugs]
@@ -444,7 +442,7 @@ class Board():
         #         current = stack.pop()
         #         visited.add(current)
         #         for d in Direction.flat():
-        #             neighbor = self._get_neighbor(current, d)
+        #             neighbor = current.get_neighbor(d)
         #             if neighbor != position and self._bugs_from_pos(neighbor) and neighbor not in visited:
         #                 stack.add(neighbor)
         #     return all(pos in visited for pos in neighbors_pos)
@@ -472,9 +470,10 @@ class Board():
             if not left_dir or not right_dir:
                 moved = Bug.parse(bug_string_1)
                 if (relative_pos := self._pos_from_bug(Bug.parse(bug_string_2)) if bug_string_2 else self.ORIGIN):
-                    move = Move(moved, self._pos_from_bug(moved), self._get_neighbor(relative_pos, Direction(f"{left_dir}|") if left_dir else Direction(f"|{right_dir or ""}")))
+                    move = Move(moved, self._pos_from_bug(moved), relative_pos.get_neighbor(Direction(f"{left_dir}|") if left_dir else Direction(f"|{right_dir or ""}")))
                     if move in self.get_valid_moves():
                         return move
+                    print("VALID_MOVES", self.get_valid_moves())
                     raise InvalidMoveError(f"'{move_string}' is not a valid move for the current board state")
                 raise InvalidMoveError(f"'{bug_string_2}' has not been played yet")
             raise InvalidMoveError("Only one direction at a time can be specified")
@@ -490,8 +489,10 @@ class Board():
     def _pos_from_bug(self, bug: Bug) -> Optional[Position]:
         return self._bug_to_pos.get(bug)
 
-    def _get_neighbor(self, position: Position, direction: Direction) -> Position:
-        return position + self.NEIGHBOR_DELTAS[direction]        
+
+    def get_neighbor(self, position: Position, direction: Direction) -> Position:
+        
+        return position + Position.neighbor_delta(direction)
 
     def __hash__(self):
         return self.zobrist_key

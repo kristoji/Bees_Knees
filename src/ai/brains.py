@@ -1,8 +1,6 @@
-from collections import defaultdict
 import math
-from typing import Final, List, Optional, Set, Tuple
+from typing import Final, Optional
 from random import choice, uniform
-from time import sleep
 from abc import ABC, abstractmethod
 from engine.board import Board
 from engine.enums import GameState, PlayerColor, Error
@@ -10,8 +8,7 @@ from copy import deepcopy
 from engine.game import Move
 from time import time
 from ai.oracle import Oracle
-from ai.mcts import Node_mcts
-# from ai.network import NeuralNetwork
+from ai.node_mcts import Node_mcts
 
 from tqdm import tqdm
 
@@ -172,7 +169,7 @@ def print_log2(msg: str) -> None:
 class MCTS(Brain):
     "Monte Carlo tree searcher. First rollout the tree then choose a move."
 
-    def __init__(self, oracle: Oracle, exploration_weight: int = 10, num_rollouts: int = 1000, time_limit: float = float("inf"), debug: bool = False) -> None:
+    def __init__(self, oracle: Oracle, exploration_weight: int = 10, num_rollouts: int = 1500, time_limit: float = float("inf"), debug: bool = False) -> None:
         super().__init__()
         self.init_node = None
         self.init_board = None  # the board to be used for the next rollout
@@ -185,18 +182,24 @@ class MCTS(Brain):
         self.debug = debug
         self.counter = 0  # used to check if the number of visits to the node is equal to the sum of visits to its children
 
-    def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
+    def calculate_best_move(self, board: Board, restriction: str, value: int, debug:bool = False) -> str:
         if restriction == "depth":
             self.time_limit = float("inf")  # ignore time limit
+            if debug:
+                start = time()
             self.num_rollouts = value # set max rollouts
             self.run_simulation_from(board, debug=False)
             a: str = self.action_selection(training=False)
+            if debug:
+                print(f"Time taken: {time() - start:.2f} seconds")
             return a 
         elif restriction == "time":
             self.time_limit = value # set time limit
             self.start_time = time() # set start time
             self.run_simulation_from(board, debug=False)
             a: str = self.action_selection(training=False)
+            if debug:
+                print(f"Rollouts done: {self.num_rollouts}")
             return a
         else:
             raise Error("Invalid restriction for MCTS")
@@ -211,10 +214,10 @@ class MCTS(Brain):
             # assert self.init_node.N == self.num_rollouts, "The number of rollouts must be equal to the number of visits to the root node."
             # print( sum([child.N for child in self.init_node.children]))
             # print(self.init_node.N)
-            assert sum([child.N for child in self.init_node.children]) == self.num_rollouts
+            assert sum([child.N for child in self.init_node.children]) == self.num_rollouts-1
             rnd = uniform(0, 1)
             for child in self.init_node.children:
-                if rnd <= (portion := child.N / self.num_rollouts):
+                if rnd <= (portion := child.N / (self.num_rollouts-1)):
                     return child
                 rnd -= portion
             raise Error(str(rnd) + " - No child selected in MCTS.choose()")
@@ -301,9 +304,9 @@ class MCTS(Brain):
         if verbose:
             print(f"Father node N: {node.N}, sum children N: {sum(child.N for child in node.children)}")
         
-        
-        # assert node.N -1  == sum(child.N for child in node.children), "The number of visits to the node must be equal to the sum of visits to its children."
-        sqrt_N_vertex = math.sqrt(node.N)
+        s = sum(child.N for child in node.children)
+        assert (node.N -1 == s), "The number of visits to the node must be equal to the sum of visits to its children."
+        sqrt_N_vertex = math.sqrt(node.N-1)
         def uct_Norels(n:Node_mcts) -> float:
             return n.Q + self.exploration_weight * n.P * sqrt_N_vertex / (1 + n.N) #----> FIXED EXPL WEIGHT
             #return n.Q + (1 + (time() - self.start_time) / self.time_limit *(self.exploration_weight - 1)) * n.P * sqrt_N_vertex / (1 + n.N) # -----> LINEAR EXPL WEIGHT DURING TURN (NO SENSE)
@@ -316,7 +319,7 @@ class MCTS(Brain):
         self.init_node = Node_mcts(last_move)
 
         self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key, 0)
-        self._select_and_expand() # expand the root node without updating N (in order to get root.N = sum(children.N))
+        # self._select_and_expand() # expand the root node without updating N (in order to get root.N = sum(children.N))
 
         # if you can only do one move, return it
         if len(self.init_node.children) == 1:

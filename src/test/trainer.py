@@ -2,12 +2,11 @@
 import os
 from engineer import Engine
 from datetime import datetime
-from test.duel import duel, duel_random, cross_platform_duel
+from test.duel import duel, duel_random
 
 from ai.oracle import Oracle
-from ai.oracleNN import OracleNN
 from ai.oracleGNN import OracleGNN
-from ai.log_utils import log_header, log_subheader, reset_log
+from ai.log_utils import log_header, reset_log
 
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 if BASE_PATH[-3:] == "src":

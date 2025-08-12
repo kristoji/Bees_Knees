@@ -1,22 +1,49 @@
 from torch.utils.data import Dataset
-import numpy as np
 import os
-import time
 from tqdm import tqdm
-
 from glob import glob
 import json
-
 import torch
 from torch_geometric.data import Data, Batch
-
+from torch_geometric.loader import DataLoader
+import pickle
+import hashlib
+import pandas as pd
+from torch.utils.data import random_split, DataLoader as TorchDataLoader
 
 class GraphDataset(Dataset):
     def __init__(self, folder_path: str):
         self.data = []
+        
+        # Find existing cache file (any .pkl file in the folder)
+        pkl_files = glob(os.path.join(folder_path, "*.pkl"))
+        
+        if pkl_files:
+            self.cache_path = pkl_files[0]  # Use the first (and hopefully only) .pkl file
+            print(f"Loading graphs from cache: {self.cache_path}")
+            try:
+                with open(self.cache_path, 'rb') as f:
+                    self.data = pickle.load(f)
+                print(f"Loaded {len(self.data)} graphs from cache.")
+                return
+            except Exception as e:
+                print(f"Failed to load cache: {e}. Processing from scratch.")
+        
+        # Create cache file path if no existing cache found
+        folder_hash = hashlib.md5(folder_path.encode()).hexdigest()[:8]
+        cache_filename = f"graph_cache_{folder_hash}.pkl"
+        self.cache_path = os.path.join(folder_path, cache_filename)
+        
+        # Process from JSON files if cache doesn't exist or failed to load
         all_files = []
 
         for subfolder in os.listdir(folder_path):
+            
+            #if the folder contains "BAK" skip it, used to remove files that are not needed
+            if "BAK" in subfolder:
+                print(f"Skipping subfolder: {subfolder}", flush=True)
+                continue
+
             print(f"Processing subfolder: {subfolder}", flush=True)
             game_dirs = glob(os.path.join(folder_path, subfolder, 'game_*'))
 
@@ -36,6 +63,15 @@ class GraphDataset(Dataset):
                 self.data.append(processed_data)
 
         print(f"Loaded {len(self.data)} graphs from {len(all_files)} JSON files.")
+        
+        # Save to cache for future use
+        try:
+            print(f"Saving graphs to cache: {self.cache_path}")
+            with open(self.cache_path, 'wb') as f:
+                pickle.dump(self.data, f)
+            print("Cache saved successfully.")
+        except Exception as e:
+            print(f"Failed to save cache: {e}")
 
     def _process_data(self, data):
         x = data['x']
@@ -68,176 +104,87 @@ class GraphDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
-    def get_dataloader(self, batch_size=32, shuffle=True, num_workers=0):
-        """Create a DataLoader with proper batching for graph data"""
-        from torch_geometric.loader import DataLoader
-        return DataLoader(self, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+    def get_dataloader(self, **kwargs):
+        """
+        Create a DataLoader with proper batching for graph data.
         
-
-class ConvDataset(Dataset):
-    def __init__(
-        self,
-        folder_path: str,
-        max_wins: int = -1,
-        max_percent_draws: float = 0.2,
-        max_cache_size = 30
-    ):
-        self.base_path = folder_path
-        self.index = []
-        self.file_sample_counts = {}
-        self.cache = {}
-        self.cache_order = []
-        self.max_cache_size = max_cache_size
-
-        # helper to gather npz files under a win_or_draw folder
-        def gather_npz(root: str, max_files:int):
-            files = []
-            if not os.path.isdir(root):
-                return files
-            num_files = 0
-            for length in os.listdir(root):  # short, long, superlong
-                length_dir = os.path.join(root, length)
-                if not os.path.isdir(length_dir):
-                    continue
-                for fname in os.listdir(length_dir):
-                    if fname.endswith(".npz"):
-                        files.append(os.path.join(length_dir, fname))
-                        num_files += 1
-                        if num_files == max_files:
-                            return sorted(files)
-            return sorted(files)
-
-        # collect win files
-        self.files_wins = gather_npz(os.path.join(self.base_path, "wins"), max_files=max_wins)
-
-        # collect draw files
-        self.files_draws = gather_npz(os.path.join(self.base_path, "draws"), max_files=len(self.files_wins)*max_percent_draws)
-
-        self.files = self.files_wins + self.files_draws
-
-        for file in tqdm(self.files, total=len(self.files), desc="Scanning npz files"):
-            with np.load(file, mmap_mode='r') as data:
-                n_samples = data["in_mats"].shape[0]
-                self.file_sample_counts[file] = n_samples
-                for i in range(n_samples):
-                    self.index.append((file, i))
+        Args:
+            **kwargs: Keyword arguments passed directly to torch_geometric.loader.DataLoader.
+                     Common arguments include:
+                     - batch_size (int): Number of samples per batch (default: 1)
+                     - shuffle (bool): Whether to shuffle data at every epoch (default: False)
+                     - num_workers (int): Number of subprocesses for data loading (default: 0)
+                     - drop_last (bool): Drop the last incomplete batch (default: False)
+                     - pin_memory (bool): Pin memory for faster GPU transfer (default: False)
         
-        print(
-            f"Scanned {len(self.files_wins)} win files "
-            f"and {len(self.files_draws)} draw files "
-            f"→ {len(self.index)} total samples."
-        )
-
+        Returns:
+            torch_geometric.loader.DataLoader: A DataLoader instance for batching graph data.
+        
+        Usage examples:
+            # Basic usage with default settings
+            loader = dataset.get_dataloader()
+            
+            # With custom batch size and shuffling
+            loader = dataset.get_dataloader(batch_size=64, shuffle=True)
+            
+            # With multiple workers for parallel loading
+            loader = dataset.get_dataloader(batch_size=32, num_workers=4, pin_memory=True)
+            
+            # All torch_geometric.loader.DataLoader arguments are supported
+            loader = dataset.get_dataloader(batch_size=16, shuffle=True, drop_last=True)
+        """
+        return DataLoader(self, **kwargs)
+        
+class EmbeddingDataset(Dataset):
+    """Dataset for loading graph embeddings from CSV file"""
+    def __init__(self, csv_path, use_labels=False):
+        self.df = pd.read_csv(csv_path)
+        
+        # Extract features (embeddings) and labels
+        if 'label' in self.df.columns and use_labels:
+            self.labels = torch.tensor(self.df['label'].values, dtype=torch.float32)
+            self.embeddings = torch.tensor(self.df.drop(columns=['label']).values, dtype=torch.float32)
+            self.has_labels = True
+        else:
+            self.embeddings = torch.tensor(self.df.filter(regex='^emb_').values, dtype=torch.float32)
+            self.has_labels = False
+            self.labels = None
+        
     def __len__(self):
-        return len(self.index)
-
+        return len(self.embeddings)
+    
     def __getitem__(self, idx):
-        file, inner_index = self.index[idx]
+        if self.has_labels:
+            return self.embeddings[idx], self.labels[idx]
+        else:
+            return self.embeddings[idx]
 
-        if file not in self.cache:
-            self._load_file(file)
-        
-        data = self.cache[file]
-        x = data["in_mats"][inner_index]
-        y_policy = data["out_mats"][inner_index]
-        y_value = data["values"][inner_index]
+    def _preload_to_gpu(self):
+        if torch.cuda.is_available():
+            self.embeddings = self.embeddings.to("cuda")
+            if self.has_labels:
+                self.labels = self.labels.to("cuda")
 
-        return x, y_policy, y_value
+    @property
+    def input_dim(self):
+        return self.embeddings.shape[1]
 
-    def _load_file(self, file:str):
-        if len(self.cache_order) >= self.max_cache_size:
-            old_file = self.cache_order.pop(0)
-            del self.cache[old_file]
-        
-        data = np.load(file, mmap_mode='r')
-        self.cache[file] = data
-        self.cache_order.append(file)
+    def get_dataloader(self, train_size=0.8, **kwargs):
+        """
+        Create a DataLoader for the dataset.
 
-class NpzDataset(Dataset):
-    def __init__(
-        self,
-        folder_path: str,
-        max_wins: int = 50,
-        max_percent_draws: float = 0.2
-    ):
-        # build the iteration folder path
-        self.base_path = folder_path
+        Args:
+            **kwargs: Keyword arguments passed to the DataLoader.
 
-        self.data_cache = {} 
-        self.file_indices = []
+        Returns:
+            DataLoader: A DataLoader instance for the dataset.
+        """
 
-        # helper to gather npz files under a win_or_draw folder
-        def gather_npz(root: str):
-            files = []
-            if not os.path.isdir(root):
-                return files
-            for length in os.listdir(root):  # short, long, superlong
-                length_dir = os.path.join(root, length)
-                if not os.path.isdir(length_dir):
-                    continue
-                for fname in os.listdir(length_dir):
-                    if fname.endswith(".npz"):
-                        files.append(os.path.join(length_dir, fname))
-            return sorted(files)
+        train_dataset, test_dataset = random_split(self, [train_size, 1 - train_size])
 
-        # collect win files
-        wins_all = gather_npz(os.path.join(self.base_path, "wins"))
-        self.files_wins = wins_all[:max_wins]
+        train_loader = TorchDataLoader(train_dataset, **kwargs)
 
-        # collect draw files
-        draws_all = gather_npz(os.path.join(self.base_path, "draws"))
-        max_draws = round(len(self.files_wins) * max_percent_draws)
-        self.files_draws = draws_all[:max_draws]
+        test_kwargs = {**kwargs, "shuffle": False}
+        test_loader = TorchDataLoader(test_dataset, **test_kwargs)
 
-        # final file list
-        self.files = self.files_wins + self.files_draws
-
-        # preload everything
-        for file_idx, file_path in tqdm(
-            enumerate(self.files),
-            total=len(self.files),
-            desc="Loading npz files"
-        ):
-            data = np.load(file_path)
-            in_mats  = data["in_mats"].astype(np.float32)
-            out_mats = data["out_mats"].astype(np.float32)
-            values   = data["values"].astype(np.float32)
-
-            # cache by full path
-            self.data_cache[file_path] = {
-                "in_mats": in_mats,
-                "out_mats": out_mats,
-                "values": values
-            }
-
-            # record indices: (which file, which sample in that file)
-            for sample_idx in range(len(in_mats)):
-                self.file_indices.append((file_idx, sample_idx))
-
-        print(
-            f"Loaded {len(self.files_wins)} win files "
-            f"and {len(self.files_draws)} draw files "
-            f"→ {len(self.file_indices)} total samples."
-        )
-
-    def __len__(self):
-        return len(self.file_indices)
-
-    def __getitem__(self, idx):
-        file_idx, item_idx = self.file_indices[idx]
-        file_path = self.files[file_idx]
-        # if file_idx < len(self.files_wins):
-        #     file_path = os.path.join(self.base_path, "wins", file_path)
-        # else:
-        #     file_path = os.path.join(self.base_path, "draws", file_path)
-
-        data = self.data_cache[file_path]
-
-        x = data["in_mats"][item_idx]
-        y_policy = data["out_mats"][item_idx]
-        y_value = data["values"][item_idx]
-
-        #print("y_policy stats: min =", np.min(y_policy), "max =", np.max(y_policy), "mean =", np.mean(y_policy))
-
-
-        return x, y_policy, y_value
+        return train_loader, test_loader
