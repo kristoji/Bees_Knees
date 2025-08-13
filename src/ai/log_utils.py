@@ -1,4 +1,5 @@
 from datetime import datetime
+import functools
 
 def reset_log(string: str = ""):
     return
@@ -19,3 +20,19 @@ def log_subheader(title: str, width: int = 50, char: str = '-'):
 def log_subsubheader(title: str, width: int = 40, char: str = '~'):
     bar = char * width
     print(f"{bar}\n{title.center(width)}\n{bar}", flush=True)
+
+
+total_calls = 0
+def countit(fn):
+  @functools.wraps(fn)
+  def wrapper(*args, **kwargs):
+    global total_calls
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        total_calls += 1
+  return wrapper
+
+def print_counter():
+    global total_calls
+    print(f"[counter] total calls: {total_calls}")

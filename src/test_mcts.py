@@ -3,7 +3,7 @@ from engine.enums import GameState
 from ai.log_utils import log_header, log_subheader, log_subsubheader
 from ai.oracleGNN import OracleGNN
 from ai.mcts_batch import MCTS_BATCH
-from engine.game import print_counter
+from ai.log_utils import print_counter
 
 #architettura corrente da cambiare in base al file palle palle
 kwargs_network = { 
@@ -116,7 +116,7 @@ exploration_weights = [
 # gnn_oracle.load("../models/pretrain_GAT_5.pt")
 
 gnn_batch = OracleGNN(device="cpu", hidden_dim=24, **kwargs_network)
-gnn_batch.load("../models/GIN_epoch_30.pt") # GIN LEMON (agree) >>> GIN TONIC palle
+gnn_batch.load("/home/kristoj/Documents/Uni/ortogonale/Hive/Bees_Knees/models/GIN_epoch_30.pt") # GIN LEMON (agree) >>> GIN TONIC palle
 
 
 

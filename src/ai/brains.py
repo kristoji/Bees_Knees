@@ -316,9 +316,8 @@ class MCTS(Brain):
     def run_simulation_from(self, board: Board, debug: bool=False) -> None:
         self.init_board = board
         last_move = board.moves[-1] if board.moves else None
-        self.init_node = Node_mcts(last_move)
+        self.init_node = Node_mcts(last_move, board.state, board.current_player_color, board.zobrist_key)
 
-        self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key, 0)
         # self._select_and_expand() # expand the root node without updating N (in order to get root.N = sum(children.N))
 
         # if you can only do one move, return it

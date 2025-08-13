@@ -1,27 +1,10 @@
 from typing import Final, Optional
 from engine.enums import Error, PlayerColor, BugType, Direction
 import re
-import functools
-
-total_calls = 0
-def countit(fn):
-  @functools.wraps(fn)
-  def wrapper(*args, **kwargs):
-    global total_calls
-    try:
-        return fn(*args, **kwargs)
-    finally:
-        total_calls += 1
-  return wrapper
-
-def print_counter():
-    global total_calls
-    print(f"[counter] total calls: {total_calls}")
 
 
 class Position:
     POSITIONS = None
-    @countit
     def __init__(self, q: int, r: int):
         self.r = r
         self.q = q

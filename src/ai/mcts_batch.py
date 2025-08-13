@@ -14,6 +14,8 @@ from engine.enums import GameState, PlayerColor, Error
 from engine.game import Move
 from ai.oracleGNN import OracleGNN
 
+from ai.log_utils import countit
+
 
 # --------------------------------------------------------------
 # MCTS with batched rollouts
@@ -28,7 +30,7 @@ class MCTS_BATCH(Brain):
     """
 
     def __init__(self, oracle: OracleGNN, exploration_weight: int = 10, num_rollouts: int = 1024,
-                 time_limit: float = float("inf"), batch_size: int = 32, debug: bool = False) -> None:
+                 time_limit: float = float("inf"), batch_size: int = 48, debug: bool = False) -> None:
         super().__init__()
         self.init_node: Optional[Node_mcts] = None
         self.init_board: Optional[Board] = None
@@ -68,6 +70,8 @@ class MCTS_BATCH(Brain):
 
     def action_selection(self, training: bool = False, debug: bool = False) -> str:
         node = self.choose(training=training, debug=debug)
+        # set the init node as the children of the init node relative to the move selected
+        self.init_node = node
         return self.init_board.stringify_move(node.move)
 
     def get_moves_probs(self) -> Dict[Move, float]:
@@ -83,8 +87,19 @@ class MCTS_BATCH(Brain):
     def run_simulation_from(self, board: Board, debug: bool = False) -> None:
         self.init_board = board
         last_move = board.moves[-1] if board.moves else None
-        self.init_node = Node_mcts(last_move)
-        self.init_node.set_state(board.state, board.current_player_color, board.zobrist_key, 0)
+
+        if not self.init_node:
+            self.init_node = Node_mcts(last_move, board.state, board.current_player_color, board.zobrist_key)
+        else: #we use the already buildt tree
+            for child in self.init_node.children:
+                if child.hash == board.zobrist_key:
+                    self.init_node = child
+                    break
+            else:
+                raise Error("No matching child found, create a new node (probably the move played is not the one suggested by action_selection/calculate_best_move)")
+                # No matching child found, create a new node
+                self.init_node = Node_mcts(last_move, board.state, board.current_player_color, board.zobrist_key, parent=self.init_node)
+            
 
         # Don't expand root here; it will be handled by the first batch flush if needed
         terminal_states = 0
@@ -243,6 +258,7 @@ class MCTS_BATCH(Brain):
     # -------------------------
     #  Selection helpers
     # -------------------------
+    @countit
     def _collect_leaf_for_batch(self) -> Optional[dict]:
         """Walk down the tree using UCT until an unexplored or terminal node.
         Return a dict describing what to evaluate/expand, without expanding.
@@ -278,6 +294,18 @@ class MCTS_BATCH(Brain):
                         (curr_board.state == GameState.BLACK_WINS and curr_board.current_player_color == PlayerColor.BLACK)
                     ) else 0.0
                 curr_node.V = v
+            # Undo path before returning
+            if path_moves:
+                curr_board.undo(len(path_moves))
+            return {
+                'node': curr_node,
+                'path_moves': path_moves,
+                'terminal_immediate': True,
+            }
+
+        elif curr_node.is_expanded:  # (but not explored)
+            # Explore the curr_node
+            curr_node.reset_children()
             # Undo path before returning
             if path_moves:
                 curr_board.undo(len(path_moves))
@@ -329,6 +357,7 @@ class MCTS_BATCH(Brain):
         }
 
     def _backpropagate(self, leaf: Node_mcts, reward: float) -> None:
+        leaf.is_unexplored = False
         while leaf is not None:
             leaf.N += 1
             leaf.W += reward
@@ -344,6 +373,7 @@ class MCTS_BATCH(Brain):
 
     def _backpropagate_non_N(self, leaf: Node_mcts, reward: float) -> None:
         """Backpropagate reward to the leaf and its ancestors, but do not update N."""
+        leaf.is_unexplored = False
         while leaf is not None:
             leaf.W += reward
             leaf.Q = leaf.W / leaf.N
