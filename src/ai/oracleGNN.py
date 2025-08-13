@@ -208,7 +208,7 @@ class OracleGNN(Oracle):
         """
         # Value for the leaf
         d_leaf = self._data_from_board(board)
-        print(d_leaf.x, d_leaf.edge_index, d_leaf.batch)
+        #print(d_leaf.x, d_leaf.edge_index, d_leaf.batch)
         if d_leaf is None:
             v = 0.5
         else:

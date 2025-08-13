@@ -195,7 +195,7 @@ class MCTS(Brain):
             return a 
         elif restriction == "time":
             self.time_limit = value # set time limit
-            self.start_time = time() # set start time
+            self.start_time = time() # set the start time
             self.run_simulation_from(board, debug=False)
             a: str = self.action_selection(training=False)
             if debug:

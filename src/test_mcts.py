@@ -3,7 +3,10 @@ from engine.enums import GameState
 from ai.log_utils import log_header, log_subheader, log_subsubheader
 from ai.oracleGNN import OracleGNN
 from ai.mcts_batch import MCTS_BATCH
+from ai.brains import MCTS
 from ai.log_utils import print_counter
+from test.duel import duel, duel_random
+from ai.oracle import Oracle
 
 #architettura corrente da cambiare in base al file palle palle
 kwargs_network = { 
@@ -116,7 +119,7 @@ exploration_weights = [
 # gnn_oracle.load("../models/pretrain_GAT_5.pt")
 
 gnn_batch = OracleGNN(device="cpu", hidden_dim=24, **kwargs_network)
-gnn_batch.load("/home/kristoj/Documents/Uni/ortogonale/Hive/Bees_Knees/models/GIN_epoch_30.pt") # GIN LEMON (agree) >>> GIN TONIC palle
+gnn_batch.load("../models/GIN_epoch_30.pt") # GIN LEMON (agree) >>> GIN TONIC palle
 
 
 
@@ -169,12 +172,14 @@ def test_mcts():
                     engine.newgame([testcase["start"]])
                     
                     # # Run MCTS with the oracle
+                    #mcts = MCTS_BATCH(oracle=oracle, exploration_weight=exploration_weight, time_limit=TIME_LIMIT)
                     mcts = MCTS_BATCH(oracle=oracle, exploration_weight=exploration_weight, time_limit=TIME_LIMIT)
                     
                     # # mcts.run_simulation_from(engine.board, debug=False)
                     # # a:str = mcts.action_selection(training=False, debug=True)
                     
-                    a:str = mcts.calculate_best_move(engine.board, restriction="depth", value=1024, debug=True)
+                    #a:str = mcts.calculate_best_move(engine.board, restriction="depth", value=1024, debug=True)
+                    a:str = mcts.calculate_best_move(engine.board, restriction="time", value=5)
                     
                     # v, pi = oracle.predict(engine.board, debug=True)
                     # print(f"Predicted value: {v}")
@@ -198,7 +203,10 @@ def main():
     """
     Main function to run the MCTS tests.
     """
-    test_mcts()
+    #test_mcts()
+    duel(old_player=gnn_batch,  
+        new_player=Oracle())
+    #duel_random(player=o, restriction="depth", value=1024, games=1, verbose=True)
 
 if __name__ == "__main__":
     main()

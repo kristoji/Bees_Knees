@@ -46,7 +46,7 @@ class Node_mcts():
                     board.undo()
                     self.children.append(child)
             else:
-                child = Node_mcts(move=None, parent=self)
+                child = Node_mcts(move=None, parent=self, gamestate=board.state, curr_player_color=board.current_player_color, hash=board.zobrist_key)
                 self.children.append(child)
         else:
             assert sum(child.N for child in self.children) >= self.N and self.N == 0, "Children N must be greater than or equal to parent N"
@@ -71,6 +71,12 @@ class Node_mcts():
         # self.is_unexplored = False
         return self.children
     
+    def reset(self) -> None:
+        self.N = 0
+        self.W = 0
+        self.Q = 0
+        self.is_unexplored = True
+
     def reset_children(self) -> None:
         for child in self.children:
             child.N = 0

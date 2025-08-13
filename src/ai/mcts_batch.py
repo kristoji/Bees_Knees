@@ -30,7 +30,7 @@ class MCTS_BATCH(Brain):
     """
 
     def __init__(self, oracle: OracleGNN, exploration_weight: int = 10, num_rollouts: int = 1024,
-                 time_limit: float = float("inf"), batch_size: int = 48, debug: bool = False) -> None:
+                 time_limit: float = float("inf"), batch_size: int = 32, debug: bool = False) -> None:
         super().__init__()
         self.init_node: Optional[Node_mcts] = None
         self.init_board: Optional[Board] = None
@@ -59,7 +59,7 @@ class MCTS_BATCH(Brain):
             return a 
         elif restriction == "time":
             self.time_limit = value # set time limit
-            self.start_time = time() # set start time
+            self.start_time = time() # set the start time
             self.run_simulation_from(board, debug=False)
             a: str = self.action_selection(training=False)
             if debug:
@@ -89,29 +89,34 @@ class MCTS_BATCH(Brain):
         last_move = board.moves[-1] if board.moves else None
 
         if not self.init_node:
+            print("TREE DA CREARE")
             self.init_node = Node_mcts(last_move, board.state, board.current_player_color, board.zobrist_key)
         else: #we use the already buildt tree
+            print("TREE GIA PRESENTE")
             for child in self.init_node.children:
                 if child.hash == board.zobrist_key:
                     self.init_node = child
+                    self.init_node.reset()  # reset N/W/Q for the new simulation
                     break
             else:
                 raise Error("No matching child found, create a new node (probably the move played is not the one suggested by action_selection/calculate_best_move)")
                 # No matching child found, create a new node
                 self.init_node = Node_mcts(last_move, board.state, board.current_player_color, board.zobrist_key, parent=self.init_node)
-            
+        
+        print(f"INITIAL NODE has already {len(self.init_node.children)} children, and N is {self.init_node.N} [run_simulation_from]")
 
         # Don't expand root here; it will be handled by the first batch flush if needed
         terminal_states = 0
         completed_rollouts = 0
+        flush_counter = 0
 
         pending: List[dict] = []               # collected leaves info
         leaf_datas: List[Data] = []            # Data for leaf states
         next_datas: List[Data] = []            # Data for next states across all leaves (for π)
 
         def flush_batch():
-            print("FLUSHHHH", flush=True)
-            nonlocal pending, leaf_datas, next_datas, completed_rollouts
+            nonlocal pending, leaf_datas, next_datas, completed_rollouts, flush_counter
+            #print(f"Compl rollout {completed_rollouts} - FLUSHHHH  (batch of size {len(pending)})", flush=True)
             if not pending:
                 return
 
@@ -161,8 +166,11 @@ class MCTS_BATCH(Brain):
                 # self._backpropagate(node, reward)
                 self._backpropagate_non_N(node, reward)  # Update N but not W/Q
 
-                self.init_board.undo(len(path_moves))
+                if len(path_moves) > 0:
+                    self.init_board.undo(len(path_moves))
                 completed_rollouts += 1
+
+            flush_counter += 1
 
             # reset buffers
             pending = []
@@ -171,45 +179,35 @@ class MCTS_BATCH(Brain):
 
         # Main loop (time-limited or rollout-limited)
         if self.time_limit < float("inf"):
-            start = time()
-            while time() - start < self.time_limit - self.epsilon:
+            while time() - self.start_time < self.time_limit - self.epsilon:
                 # Collect a leaf
                 collected = self._collect_leaf_for_batch()
                 if collected is None:
-                    # Tree is fully terminal
                     break
                 if collected.get('terminal_immediate', False):
-                    # Immediately backpropagate terminal leaves (no NN call)
                     node: Node_mcts = collected['node']
                     reward = 1 - node.reward()
                     self._backpropagate(node, reward)
                     completed_rollouts += 1
                     terminal_states += 1
                 else:
+                    # update N
+                    self._backpropagate_N(collected['node'])  # N is updated but not W/Q
+                    
                     pending.append(collected)
                     leaf_datas.append(collected['leaf_data'])
-                    for spec in collected['move_specs']:
-                        if spec[0] == 'predict':
-                            # spec: ('predict', next_index_placeholder, None, move)
-                            new_idx = len(next_datas)
-                            next_datas.append(spec[1])  # here spec[1] temporarily stores Data
-                            # replace in place with ('predict', flattened_index, None, move)
-                            spec_list = list(spec)
-                            spec_list[1] = new_idx
-                            spec = tuple(spec_list)
-                        # Update back into move_specs
-                    # we need to reassign because tuples are immutable; rebuild move_specs
                     rebuilt_specs = []
-                    for spec in collected['move_specs']:
-                        if spec[0] == 'predict' and isinstance(spec[1], Data):
+                    for spec in collected['move_specs']: # per ogni tupla
+                        if spec[0] == 'predict':
+                            # sostituisci Data con l'indice nella lista next_datas
                             new_idx = len(next_datas)
-                            next_datas.append(spec[1])
+                            next_datas.append(spec[1])  # Data
                             rebuilt_specs.append(('predict', new_idx, None, spec[3]))
                         else:
                             rebuilt_specs.append(spec)
                     collected['move_specs'] = rebuilt_specs
 
-                    if len(pending) >= self.batch_size:
+                    if len(pending) >= (1 if flush_counter==0 else self.batch_size//4 if flush_counter==1 else self.batch_size):
                         flush_batch()
 
             # Flush leftovers
@@ -244,7 +242,7 @@ class MCTS_BATCH(Brain):
                             rebuilt_specs.append(spec)
                     collected['move_specs'] = rebuilt_specs
 
-                    if len(pending) >= self.batch_size:
+                    if len(pending) >= (1 if flush_counter==0 else self.batch_size//4 if flush_counter==1 else self.batch_size):
                         flush_batch()
 
             flush_batch()
@@ -282,7 +280,7 @@ class MCTS_BATCH(Brain):
             curr_node = self._uct_select(curr_node)
             curr_board.safe_play(curr_node.move)
             path_moves.append(curr_node.move)
-
+        
         # Handle terminal
         if curr_node.is_terminal:
             if curr_node.V == -1:  # draw needs heuristic once
@@ -303,7 +301,8 @@ class MCTS_BATCH(Brain):
                 'terminal_immediate': True,
             }
 
-        elif curr_node.is_expanded:  # (but not explored)
+        elif curr_node.is_unexplored and curr_node.is_expanded:  # (but not explored)
+            print("SI GODE, L'AVEVAMO GIA")
             # Explore the curr_node
             curr_node.reset_children()
             # Undo path before returning
@@ -314,47 +313,48 @@ class MCTS_BATCH(Brain):
                 'path_moves': path_moves,
                 'terminal_immediate': True,
             }
+        
+        else:
+            # Unexplored case – collect Data for leaf and for each child next state
+            # Data for leaf
+            d_leaf = self.oracle._data_from_board(curr_board)
+            if d_leaf is None:
+                d_leaf = Data(x=torch.zeros((1, 13), dtype=torch.float32),
+                            edge_index=torch.zeros((2, 0), dtype=torch.long),
+                            batch=torch.zeros(1, dtype=torch.long))
 
-        # Unexplored case – collect Data for leaf and for each child next state
-        # Data for leaf
-        d_leaf = self.oracle._data_from_board(curr_board)
-        if d_leaf is None:
-            d_leaf = Data(x=torch.zeros((1, 13), dtype=torch.float32),
-                          edge_index=torch.zeros((2, 0), dtype=torch.long),
-                          batch=torch.zeros(1, dtype=torch.long))
-
-        move_specs: List[Tuple[str, Optional[Data], Optional[float], Move]] = []
-        valid_moves = list(curr_board.get_valid_moves())
-        for m in valid_moves:
-            curr_board.safe_play(m)
-            if curr_board.state != GameState.IN_PROGRESS:
-                if curr_board.state == GameState.DRAW:
-                    V = 0.5
+            move_specs: List[Tuple[str, Optional[Data], Optional[float], Move]] = []
+            valid_moves = list(curr_board.get_valid_moves())
+            for m in valid_moves:
+                curr_board.safe_play(m)
+                if curr_board.state != GameState.IN_PROGRESS:
+                    if curr_board.state == GameState.DRAW:
+                        V = 0.5
+                    else:
+                        V = 1.0 if (
+                            (curr_board.state == GameState.WHITE_WINS and curr_board.current_player_color == PlayerColor.WHITE) or
+                            (curr_board.state == GameState.BLACK_WINS and curr_board.current_player_color == PlayerColor.BLACK)
+                        ) else 0.0
+                    move_specs.append(('terminal', None, float(V), m))
                 else:
-                    V = 1.0 if (
-                        (curr_board.state == GameState.WHITE_WINS and curr_board.current_player_color == PlayerColor.WHITE) or
-                        (curr_board.state == GameState.BLACK_WINS and curr_board.current_player_color == PlayerColor.BLACK)
-                    ) else 0.0
-                move_specs.append(('terminal', None, float(V), m))
-            else:
-                d_next = self.oracle._data_from_board(curr_board)
-                if d_next is None:
-                    move_specs.append(('terminal', None, 0.5, m))
-                else:
-                    move_specs.append(('predict', d_next, None, m))
-            curr_board.undo()
+                    d_next = self.oracle._data_from_board(curr_board)
+                    if d_next is None:
+                        move_specs.append(('terminal', None, 0.5, m))
+                    else:
+                        move_specs.append(('predict', d_next, None, m))
+                curr_board.undo()
 
-        # Undo path before returning
-        if path_moves:
-            curr_board.undo(len(path_moves))
+            # Undo path before returning
+            if path_moves:
+                curr_board.undo(len(path_moves))
 
-        return {
-            'node': curr_node,
-            'path_moves': path_moves,
-            'leaf_data': d_leaf,
-            'move_specs': move_specs,
-            'terminal_immediate': False,
-        }
+            return {
+                'node': curr_node,
+                'path_moves': path_moves,
+                'leaf_data': d_leaf,
+                'move_specs': move_specs,
+                'terminal_immediate': False,
+            }
 
     def _backpropagate(self, leaf: Node_mcts, reward: float) -> None:
         leaf.is_unexplored = False
