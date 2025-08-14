@@ -42,6 +42,7 @@ class MCTS_BATCH(Brain):
         self.epsilon = 0.05
         self.start_time = time()
         self.debug = debug
+        self.hashmap: Dict[int, float] = {}  # For storing V values of states
 
     # -------------------------
     #  Public API
@@ -52,16 +53,16 @@ class MCTS_BATCH(Brain):
             if debug:
                 start = time()
             self.num_rollouts = value # set max rollouts
-            self.run_simulation_from(board, debug=False)
-            a: str = self.action_selection(training=False)
+            self.run_simulation_from(board, debug=debug)
+            a: str = self.action_selection(training=False, debug=debug)
             if debug:
                 print(f"Time taken: {time() - start:.2f} seconds")
             return a 
         elif restriction == "time":
             self.time_limit = value # set time limit
             self.start_time = time() # set the start time
-            self.run_simulation_from(board, debug=False)
-            a: str = self.action_selection(training=False)
+            self.run_simulation_from(board, debug=debug)
+            a: str = self.action_selection(training=False, debug=debug)
             if debug:
                 print(f"Rollouts done: {self.num_rollouts}")
             return a
@@ -85,6 +86,9 @@ class MCTS_BATCH(Brain):
     #  Core MCTS (batched)
     # -------------------------
     def run_simulation_from(self, board: Board, debug: bool = False) -> None:
+
+        # self.hashmap.clear()  # Clear the hashmap for new simulation
+
         self.init_board = board
         last_move = board.moves[-1] if board.moves else None
 
@@ -96,6 +100,8 @@ class MCTS_BATCH(Brain):
             for child in self.init_node.children:
                 if child.hash == board.zobrist_key:
                     self.init_node = child
+                    print(f"INITIAL NODE has already {len(self.init_node.children)} children, and N is {self.init_node.N} [run_simulation_from]")
+
                     self.init_node.reset()  # reset N/W/Q for the new simulation
                     break
             else:
@@ -103,7 +109,6 @@ class MCTS_BATCH(Brain):
                 # No matching child found, create a new node
                 self.init_node = Node_mcts(last_move, board.state, board.current_player_color, board.zobrist_key, parent=self.init_node)
         
-        print(f"INITIAL NODE has already {len(self.init_node.children)} children, and N is {self.init_node.N} [run_simulation_from]")
 
         # Don't expand root here; it will be handled by the first batch flush if needed
         terminal_states = 0

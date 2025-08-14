@@ -189,15 +189,15 @@ class MCTS(Brain):
                 start = time()
             self.num_rollouts = value # set max rollouts
             self.run_simulation_from(board, debug=False)
-            a: str = self.action_selection(training=False)
+            a: str = self.action_selection(training=False, debug=debug)
             if debug:
-                print(f"Time taken: {time() - start:.2f} seconds")
+                print(f"Time taken: {time() - start:.2f} seconds", flush=True)
             return a 
         elif restriction == "time":
             self.time_limit = value # set time limit
             self.start_time = time() # set the start time
             self.run_simulation_from(board, debug=False)
-            a: str = self.action_selection(training=False)
+            a: str = self.action_selection(training=False, debug=debug)
             if debug:
                 print(f"Rollouts done: {self.num_rollouts}")
             return a
@@ -207,9 +207,9 @@ class MCTS(Brain):
     def choose(self, training:bool, debug:bool = False) -> Node_mcts:
         "Choose the best successor of node. (Choose a move in the game)"
         if debug:
-            print("\n\nChildren of root node (sorted by visits):\n")
+            print("\n\nChildren of root node (sorted by visits):\n", flush=True)
             for child in sorted(self.init_node.children, key=lambda x: x.N, reverse=True):
-                print(f"Move: {self.init_board.stringify_move(child.move)} -> N = {child.N}, W = {child.W}, Q = {child.Q}, P = {child.P}, V = {child.V}")
+                print(f"Move: {self.init_board.stringify_move(child.move)} -> N = {child.N}, W = {child.W}, Q = {child.Q}, P = {child.P}, V = {child.V}", flush=True)
         if training:
             # assert self.init_node.N == self.num_rollouts, "The number of rollouts must be equal to the number of visits to the root node."
             # print( sum([child.N for child in self.init_node.children]))
@@ -290,6 +290,7 @@ class MCTS(Brain):
 
     def _backpropagate(self, leaf: Node_mcts, reward: float) -> None:
         "Send the reward back up to the ancestors of the leaf"
+        leaf.is_unexplored = False
         while leaf is not None:
             leaf.N += 1
             leaf.W += reward
@@ -302,7 +303,7 @@ class MCTS(Brain):
         "Select a child of node, balancing exploration & exploitation"
 
         if verbose:
-            print(f"Father node N: {node.N}, sum children N: {sum(child.N for child in node.children)}")
+            print(f"Father node N: {node.N}, sum children N: {sum(child.N for child in node.children)}", flush=True)
         
         s = sum(child.N for child in node.children)
         assert (node.N -1 == s), "The number of visits to the node must be equal to the sum of visits to its children."
@@ -344,18 +345,13 @@ class MCTS(Brain):
                         terminal_states += 1
         
         if debug:
-            print(f"\nTerminal states {terminal_states}/{self.num_rollouts} rollouts")
+            print(f"\nTerminal states {terminal_states}/{self.num_rollouts} rollouts", flush=True)
 
     def action_selection(self, training=False, debug:bool = False) -> str:
         # , board: Board
         # assert board == self.init_board
         node = self.choose(training=training, debug=debug)
         return self.init_board.stringify_move(node.move)
-        
-
-    def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
-        self.run_simulation_from(board)
-        return self.action_selection(debug=self.debug)
 
     def get_moves_probs(self) -> dict[Move, float]:
         #, board:Board

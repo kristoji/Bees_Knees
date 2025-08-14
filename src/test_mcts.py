@@ -178,8 +178,8 @@ def test_mcts():
                     # # mcts.run_simulation_from(engine.board, debug=False)
                     # # a:str = mcts.action_selection(training=False, debug=True)
                     
-                    #a:str = mcts.calculate_best_move(engine.board, restriction="depth", value=1024, debug=True)
-                    a:str = mcts.calculate_best_move(engine.board, restriction="time", value=5)
+                    a:str = mcts.calculate_best_move(engine.board, restriction="depth", value=1024, debug=True)
+                    #a:str = mcts.calculate_best_move(engine.board, restriction="time", value=5)
                     
                     # v, pi = oracle.predict(engine.board, debug=True)
                     # print(f"Predicted value: {v}")
@@ -203,9 +203,13 @@ def main():
     """
     Main function to run the MCTS tests.
     """
-    #test_mcts()
-    duel(old_player=gnn_batch,  
-        new_player=Oracle())
+    test_mcts()
+    #duel(old_player=gnn_batch,  
+    #    new_player=gnn_batch,
+    #    restriction = "depth", 
+    #    value = 1024,
+    #    games=1,
+    #    draw_limit=10)
     #duel_random(player=o, restriction="depth", value=1024, games=1, verbose=True)
 
 if __name__ == "__main__":

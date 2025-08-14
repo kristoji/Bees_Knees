@@ -1,4 +1,3 @@
-
 from ai.brains import MCTS, Random
 from engine.enums import GameState
 from ai.oracle import Oracle
@@ -6,18 +5,20 @@ from ai.log_utils import log_header, log_subheader
 from engineer import Engine
 from test.subp import start_process, read_all, send, play_step_single_process, check_end_game
 from engine.board import Board
+from ai.mcts_batch import MCTS_BATCH
 import subprocess
 
 
-N_DUELS = 10                # Number of games to play in a duel
+N_DUELS = 2            # Number of games to play in a duel
 VERBOSE = True              # If True, prints the board state after each move
 TIME_LIMIT = 5.0            # seconds for each MCTS simulation
 DRAW_LIMIT = 100            # turns after the match ends in a draw
 
 
 def duel_random(    player: Oracle, 
+                    restriction: str,
+                    value: int, 
                     games: int = N_DUELS, 
-                    time_limit:float = TIME_LIMIT, 
                     verbose:bool = VERBOSE, 
                     draw_limit:int = DRAW_LIMIT) -> tuple[float, float]:
     """
@@ -30,22 +31,30 @@ def duel_random(    player: Oracle,
 
     for game in range(games):
 
-        log_subheader(f"Duel Game {game + 1} of {games}: PLAYER {player_wins} - {random_wins} RANDOM")
+        log_header(f"Duel Game {game + 1} of {games}: PLAYER {player_wins} - {random_wins} RANDOM")
 
         engine.newgame(["Base+MLP"])
         s = engine.board
         winner = None
 
-        mcts_player = MCTS(oracle=player, time_limit=time_limit, debug=True)
+        
+        mcts_player = MCTS_BATCH(oracle=player, debug=True)
+
         random_player = Random()
 
         white_player = mcts_player if game % 2 == 0 else random_player
         black_player = random_player if game % 2 == 0 else mcts_player
 
+        if game%2 == 0:
+            log_subheader("WHITE: mcts - BLACK: random")
+        else:
+            log_subheader("WHITE: random - BLACK: mcts")
+
+
         i = 0
         while not winner:
             
-            a:str = white_player.calculate_best_move(s, "time", time_limit)
+            a:str = white_player.calculate_best_move(s, restriction=restriction, value=value, debug=True)
             engine.play(a, verbose=verbose)
             i+= 1
 
@@ -58,7 +67,7 @@ def duel_random(    player: Oracle,
                 winner: GameState = GameState.DRAW
                 break
             
-            a: str = black_player.calculate_best_move(s, "time", time_limit)
+            a: str = black_player.calculate_best_move(s, restriction=restriction, value=value, debug=True)
             engine.play(a, verbose=verbose)
             i+= 1
     
@@ -90,8 +99,9 @@ def duel_random(    player: Oracle,
 
 def duel(   new_player: Oracle, 
             old_player: Oracle, 
-            games: int = N_DUELS, 
-            time_limit:int = TIME_LIMIT, 
+            restriction: str,
+            value: int,
+            games: int = N_DUELS,
             verbose:bool = VERBOSE, 
             draw_limit:int = DRAW_LIMIT) -> tuple[float, float]:
     """
@@ -110,8 +120,8 @@ def duel(   new_player: Oracle,
         s = engine.board
         winner = None
 
-        mcts_game_old = MCTS(oracle=old_player, time_limit=time_limit)
-        mcts_game_new = MCTS(oracle=new_player, time_limit=time_limit)
+        mcts_game_old = MCTS_BATCH(oracle=old_player,debug=True)
+        mcts_game_new = MCTS(oracle=new_player,debug=True)
 
         white_player = mcts_game_old if game % 2 == 0 else mcts_game_new
         black_player = mcts_game_new if game % 2 == 0 else mcts_game_old
@@ -119,7 +129,7 @@ def duel(   new_player: Oracle,
         i = 0
         while not winner:
 
-            a: str = white_player.calculate_best_move(s, "time", time_limit)
+            a: str = white_player.calculate_best_move(s, restriction, value, debug=True)
             engine.play(a, verbose=verbose)
             i+= 1
 
@@ -132,7 +142,7 @@ def duel(   new_player: Oracle,
                 winner: GameState = GameState.DRAW
                 break
 
-            a: str = black_player.calculate_best_move(s, "time", time_limit)
+            a: str = black_player.calculate_best_move(s, restriction, value, debug=True)
             engine.play(a, verbose=verbose)
             i+= 1
     
