@@ -5,14 +5,17 @@ from ai.autoencoder import Autoencoder
 def main():
     # Configuration
     CSV_PATH = "data/embeddings_2.csv"  # Adjust path as needed
-    LATENT_DIM = 2
+    LATENT_DIM = 3584 #4096 #per Llama, per DeepSeek Distill Qwen è 3584 
     MODEL_DIR = f"models\\ae_{LATENT_DIM}"
-    EPOCHS = 1
+    EPOCHS = 25
     BATCH_SIZE = 1024
     LEARNING_RATE = 1e-4
 
     VALIDATION_SPLIT = 0.2
-    
+
+
+    HIDDEN_DIMS = [32, 64, 128, 256, 512, 1024, 2048] #architettura LLama 3.2 3B ae
+
     # Device configuration
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -54,9 +57,9 @@ def main():
     model = Autoencoder(
         input_dim=input_dim,
         latent_dim=LATENT_DIM,
-        hidden_dims=None,  # Use default architecture
+        hidden_dims=HIDDEN_DIMS,
         dropout=0.1,
-        lr=1e-4,
+        lr=LEARNING_RATE,
         weight_decay=1e-6
     )
 
@@ -83,9 +86,9 @@ def main():
     new_model = Autoencoder(
         input_dim=input_dim,
         latent_dim=LATENT_DIM,
-        hidden_dims=None,  # Use default architecture
+        hidden_dims=HIDDEN_DIMS, 
         dropout=0.1,
-        lr=1e-4,
+        lr=LEARNING_RATE,
         weight_decay=1e-6
     )
     new_model.load_model(MODEL_DIR)

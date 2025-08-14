@@ -203,13 +203,13 @@ def main():
     """
     Main function to run the MCTS tests.
     """
-    test_mcts()
-    #duel(old_player=gnn_batch,  
-    #    new_player=gnn_batch,
-    #    restriction = "depth", 
-    #    value = 1024,
-    #    games=1,
-    #    draw_limit=10)
+    #test_mcts()
+    duel(old_player=gnn_batch,  
+        new_player=gnn_batch,
+        restriction = "depth", 
+        value = 1024,
+        games=1,
+        draw_limit=50)
     #duel_random(player=o, restriction="depth", value=1024, games=1, verbose=True)
 
 if __name__ == "__main__":
