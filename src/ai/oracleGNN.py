@@ -55,20 +55,20 @@ class OracleGNN(Oracle):
 
         log_header(f"STARTING DATA LOADING")
 
-        self.train_loader =  GraphDataset(folder_path=self.path) # ------------> DA METTERE co dataloader
+        self.dataset =  GraphDataset(folder_path=self.path) # ------------> DA METTERE co dataloader
 
         if not self.network:
             raise ValueError("Neural network is not initialized.")
         
         if self.device.type == 'cuda':
             print(f"Pre-loading dataset to GPU: {self.device}")
-            self.train_loader = self._preload_to_gpu(self.train_loader)
+            self.dataset = self._preload_to_gpu(self.dataset)
         
         batch_size = 1024 #128
         if self.device.type == 'cuda':
-            self.train_loader = self.train_loader.get_dataloader(batch_size=batch_size, shuffle=True, num_workers=0)
+            self.train_loader, self.test_loader = self.dataset.get_dataloader(batch_size=batch_size, shuffle=True, num_workers=0)
         else: #if we are on CPU
-            self.train_loader = self.train_loader.get_dataloader(batch_size=batch_size, shuffle=True, num_workers=6, pin_memory=True, persistent_workers=True, prefetch_factor=4)
+            self.train_loader, self.test_loader = self.dataset.get_dataloader(batch_size=batch_size, shuffle=True, num_workers=6, pin_memory=True, persistent_workers=True, prefetch_factor=4)
 
         if not self.network:
             raise ValueError("Neural network is not initialized.")
@@ -76,6 +76,7 @@ class OracleGNN(Oracle):
         log_header("STARTING PRE-TRAINING")
         self.network.train_network(
             train_loader=self.train_loader,
+            val_loader=self.test_loader,
             epochs=epochs,
         )
 

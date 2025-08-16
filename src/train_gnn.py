@@ -74,31 +74,32 @@ def main():
     #set device as an environment variable so that we can access it from everywhere
     os.environ["TORCH_DEVICE"] = str(device)
 
-    """
+    #ARCHITETTURA PER LLM
     kwargs_network = {
         # Architecture options
         'conv_type': 'GIN',  # 'GIN', 'GAT', 'GCN'
-        'num_layers': 10,
+        'num_layers': 6,
         # GAT specific options
         'gat_heads': 4,
         'gat_concat': True,
         # Dropout options
-        'conv_dropout': 0.0,
-        'mlp_dropout': 0.0,
-        'final_dropout': 0.1,
+        'conv_dropout': 0.1,
+        'mlp_dropout': 0.1,
+        'final_dropout': 0.2,
         # Normalization options
         'use_batch_norm': False,
-        'use_layer_norm': False,
+        'use_layer_norm': True,
         # Residual connections
-        'use_residual': True,
+        'use_residual': False,
         # Pooling options
-        'pooling': 'mean',  # 'mean', 'max', 'add', 'concat'
+        'pooling': 'add',  # 'mean', 'max', 'add', 'concat'
         # MLP options
-        'mlp_layers': 2,
-        'final_mlp_layers': 2
+        'mlp_layers': 3,
+        'final_mlp_layers': 3
     }
+    f_theta = OracleGNN(device=str(device), hidden_dim=256, **kwargs_network)  # Initialize the OracleGNN
     """
-
+    #ARCHITETTURA SNELLA
     kwargs_network = {
         # Architecture options
         'conv_type': 'GIN',  # 'GIN', 'GAT', 'GCN'
@@ -121,8 +122,8 @@ def main():
         'mlp_layers': 2,
         'final_mlp_layers': 2
     }
-
-    f_theta = OracleGNN(device=str(device), hidden_dim=24, **kwargs_network)  # Initialize the OracleGNN
+    """
+    #f_theta = OracleGNN(device=str(device), hidden_dim=24, **kwargs_network)  # Initialize the OracleGNN
 
 
     #f_theta.training(train_data_path= "pro_matches/GNN_Apr-3-2024/graphs/",epochs=15)  # Initial training

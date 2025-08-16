@@ -6,6 +6,7 @@ from torch.nn import Linear, Dropout, BatchNorm1d, LayerNorm
 from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool, GATConv, GCNConv, GINConv
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import os
 
 # MR. OPUS FUTURE LAYER SUGGESTION.
 # from torch_geometric.nn import SAGEConv, ChebConv, GraphConv, TransformerConv
@@ -329,20 +330,18 @@ class GraphClassifier(pl.LightningModule):
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
     def training_step(self, batch, batch_idx):
-        logits, loss, acc = self.forward(batch, mode="train")
+        logits, loss, _ = self.forward(batch, mode="train")
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        self.log('train_acc', acc, prog_bar=False)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        logits, loss, acc = self.forward(batch, mode="val")
+        logits, loss, _ = self.forward(batch, mode="val")
         self.log('val_loss', loss, prog_bar=True)
-        self.log('val_acc', acc, prog_bar=False)
         return loss
 
     def test_step(self, batch, batch_idx):
-        logits, _, acc = self.forward(batch, mode="test")
-        self.log('test_acc', acc)
+        logits, loss, _ = self.forward(batch, mode="test")
+        self.log('test_loss', loss)
 
     def train_epoch(self, train_loader: DataLoader):
         """Custom training epoch for manual training loop"""
@@ -364,24 +363,81 @@ class GraphClassifier(pl.LightningModule):
             
             total_loss += loss.item()
         return total_loss / len(train_loader)
-    
-    def train_network(self, train_loader: DataLoader, epochs: int = 10):
-        """Custom training loop"""
+
+    def validate_epoch(self, val_loader: DataLoader):
+        """Custom validation epoch"""
+        self.model.eval()
+        total_loss = 0.0
+        with torch.no_grad():
+            for batch in tqdm(val_loader, desc="Val Batches", leave=False):
+                batch = batch.to(self.device)
+                _, loss, _ = self.forward(batch, mode="val")
+                total_loss += loss.item()
+        return total_loss / len(val_loader)
+
+    def train_network(self, train_loader: DataLoader, epochs: int = 10, val_loader: DataLoader = None):
+        """Custom training loop with optional validation"""
+        
         optimizer = self.configure_optimizers()
         if isinstance(optimizer, dict):
             optimizer = optimizer['optimizer']
+        
+        # Create models directory if it doesn't exist
+        os.makedirs("models", exist_ok=True)
+        
+        # Initialize tracking lists
+        train_losses = []
+        val_losses = []
+        
+        print(f"\nStarting training for {epochs} epochs...")
+        print(f"Model: {self.conv_type}")
+        print(f"Learning Rate: {self.lr}")
+        print(f"Weight Decay: {self.weight_decay}")
+        if val_loader:
+            print(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
+        else:
+            print(f"Train batches: {len(train_loader)}")
+        print("-" * 50)
             
         self.model.train()
         for epoch in tqdm(range(epochs), desc="Training", unit="epoch"):
-            ep_loss = self.train_epoch(train_loader)
-
+            # Training
+            train_loss = self.train_epoch(train_loader)
+            train_losses.append(train_loss)
+            
+            # Validation
+            if val_loader:
+                val_loss = self.validate_epoch(val_loader)
+                val_losses.append(val_loss)
+            
+            # Save checkpoint
             if (epoch+1) % 5 == 0 and epoch != 0:
                 self.save(f"models/{self.conv_type}_epoch_{epoch+1}.pt")
-
-            text_tqdm = f'Epoch {epoch+1}/{epochs} completed. Loss: {ep_loss:.4f}'
-
-            #append this to a log file called "training.log" in models/
+            
+            # Prepare log text
+            if val_loader:
+                text_tqdm = f'Epoch {epoch+1}/{epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}'
+            else:
+                text_tqdm = f'Epoch {epoch+1}/{epochs} | Train Loss: {train_loss:.4f}'
+            
+            # Log to file
             with open("models/training.log", "a") as log_file:
                 log_file.write(text_tqdm + "\n")
-
+            
             tqdm.write(text_tqdm)
+        
+        # Final save
+        self.save(f"models/{self.conv_type}_final.pt")
+        
+        # Print final statistics
+        print("\n" + "="*60)
+        print("TRAINING COMPLETED")
+        print("="*60)
+        print(f"Final Train Loss: {train_losses[-1]:.4f}")
+        if val_loader:
+            print(f"Final Val Loss: {val_losses[-1]:.4f}")
+            print(f"Best Val Loss: {min(val_losses):.4f} (Epoch {val_losses.index(min(val_losses))+1})")
+        print(f"Model saved as: models/{self.conv_type}_final.pt")
+        print("="*60)
+
+

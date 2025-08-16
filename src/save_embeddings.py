@@ -12,9 +12,9 @@ import datetime
 kwargs_network = {
         # Architecture options
         'conv_type': 'GIN',  # 'GIN', 'GAT', 'GCN'
-        'num_layers': 2,
+        'num_layers': 6,
         # GAT specific options
-        'gat_heads': 8,
+        'gat_heads': 4,
         'gat_concat': True,
         # Dropout options
         'conv_dropout': 0.1,
@@ -28,14 +28,14 @@ kwargs_network = {
         # Pooling options
         'pooling': 'add',  # 'mean', 'max', 'add', 'concat'
         # MLP options
-        'mlp_layers': 2,
-        'final_mlp_layers': 2
+        'mlp_layers': 3,
+        'final_mlp_layers': 3
     }
 
 def load_model(model_path, **kwargs_network):
     """Load a pre-trained GNN model"""
     log_header(f"Loading model from {model_path}")
-    oracle = OracleGNN(hidden_dim=24, **kwargs_network)
+    oracle = OracleGNN(hidden_dim=256, **kwargs_network)
     oracle.load(model_path)
     return oracle
 
@@ -53,7 +53,7 @@ def extract_embeddings(oracle, dataset_path, output_path, batch_size=64):
     
     # Load dataset - GraphDataset already handles JSON loading and processing
     dataset = GraphDataset(folder_path=dataset_path)
-    dataloader = dataset.get_dataloader(batch_size=batch_size, shuffle=False)
+    dataloader, _ = dataset.get_dataloader(batch_size=batch_size, shuffle=False)
     
     # Lists to store embeddings and labels
     all_embeddings = []
