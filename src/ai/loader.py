@@ -104,11 +104,13 @@ class GraphDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
-    def get_dataloader(self, **kwargs):
+    def get_dataloader(self, train_size=None, **kwargs):
         """
         Create a DataLoader with proper batching for graph data.
         
         Args:
+            train_size (float, optional): If provided, returns a tuple of (train_loader, test_loader)
+                                         with the dataset split according to this ratio (e.g., 0.8 for 80% train).
             **kwargs: Keyword arguments passed directly to torch_geometric.loader.DataLoader.
                      Common arguments include:
                      - batch_size (int): Number of samples per batch (default: 1)
@@ -118,22 +120,27 @@ class GraphDataset(Dataset):
                      - pin_memory (bool): Pin memory for faster GPU transfer (default: False)
         
         Returns:
-            torch_geometric.loader.DataLoader: A DataLoader instance for batching graph data.
-        
-        Usage examples:
-            # Basic usage with default settings
-            loader = dataset.get_dataloader()
-            
-            # With custom batch size and shuffling
-            loader = dataset.get_dataloader(batch_size=64, shuffle=True)
-            
-            # With multiple workers for parallel loading
-            loader = dataset.get_dataloader(batch_size=32, num_workers=4, pin_memory=True)
-            
-            # All torch_geometric.loader.DataLoader arguments are supported
-            loader = dataset.get_dataloader(batch_size=16, shuffle=True, drop_last=True)
+            If train_size is None:
+                torch_geometric.loader.DataLoader: A single DataLoader instance for the entire dataset.
+            If train_size is provided:
+                Tuple[DataLoader, DataLoader]: A tuple of (train_loader, test_loader).
         """
-        return DataLoader(self, **kwargs)
+        if train_size is None:
+            return DataLoader(self, **kwargs)
+        
+        # Split dataset into train and test
+        train_size = int(train_size * len(self))
+        test_size = len(self) - train_size
+        train_dataset, test_dataset = random_split(self, [train_size, test_size])
+        
+        # Create train DataLoader with provided kwargs
+        train_loader = DataLoader(train_dataset, **kwargs)
+        
+        # Create test DataLoader with same kwargs but ensure shuffle=False
+        test_kwargs = {**kwargs, "shuffle": False}
+        test_loader = DataLoader(test_dataset, **test_kwargs)
+        
+        return train_loader, test_loader
         
 class EmbeddingDataset(Dataset):
     """Dataset for loading graph embeddings from CSV file"""

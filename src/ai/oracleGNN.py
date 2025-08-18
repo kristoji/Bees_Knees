@@ -66,9 +66,9 @@ class OracleGNN(Oracle):
         
         batch_size = 1024 #128
         if self.device.type == 'cuda':
-            self.train_loader, self.test_loader = self.dataset.get_dataloader(batch_size=batch_size, shuffle=True, num_workers=0)
+            self.train_loader, self.test_loader = self.dataset.get_dataloader(batch_size=batch_size, train_size=0.8, shuffle=True, num_workers=0)
         else: #if we are on CPU
-            self.train_loader, self.test_loader = self.dataset.get_dataloader(batch_size=batch_size, shuffle=True, num_workers=6, pin_memory=True, persistent_workers=True, prefetch_factor=4)
+            self.train_loader, self.test_loader = self.dataset.get_dataloader(batch_size=batch_size, train_size=0.8, shuffle=True, num_workers=6, pin_memory=True, persistent_workers=True, prefetch_factor=4)
 
         if not self.network:
             raise ValueError("Neural network is not initialized.")
