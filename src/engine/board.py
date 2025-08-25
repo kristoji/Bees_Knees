@@ -470,7 +470,12 @@ class Board():
             if not left_dir or not right_dir:
                 moved = Bug.parse(bug_string_1)
                 if (relative_pos := self._pos_from_bug(Bug.parse(bug_string_2)) if bug_string_2 else self.ORIGIN):
-                    move = Move(moved, self._pos_from_bug(moved), relative_pos.get_neighbor(Direction(f"{left_dir}|") if left_dir else Direction(f"|{right_dir or ""}")))
+                    # Fix the f-string syntax issue by constructing the direction string separately
+                    if left_dir:
+                        direction_str = f"{left_dir}|"
+                    else:
+                        direction_str = f"|{right_dir or ''}"
+                    move = Move(moved, self._pos_from_bug(moved), relative_pos.get_neighbor(Direction(direction_str)))
                     if move in self.get_valid_moves():
                         return move
                     print("VALID_MOVES", self.get_valid_moves())

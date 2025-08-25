@@ -165,9 +165,9 @@ class Move:
     PASS: Final[str] = "pass"
     REGEX: str = (
         f"({Bug.REGEX})"
-        f"( ?({'|'.join(f'\\{d}' for d in Direction.flat_left())})?"
+        "( ?(" + '|'.join('\\' + str(d) for d in Direction.flat_left()) + ")?"
         f"({Bug.REGEX})"
-        f"({'|'.join(f'\\{d}' for d in Direction.flat_right())})?)?"
+        "(" + '|'.join('\\' + str(d) for d in Direction.flat_right()) + ")?)?"
     )
 
     @classmethod

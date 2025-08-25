@@ -11,8 +11,13 @@ class Encoder(nn.Module):
     def __init__(self, input_dim, latent_dim, hidden_dims=None, dropout=0.1):
         super().__init__()
         
+        # Progressive expansion: 256 -> 512 -> 1024 -> ... -> (latent)
         if hidden_dims is None:
-            hidden_dims = [input_dim // 2, input_dim // 4]
+            hidden_dims = []
+            dim = input_dim * 2
+            while dim < latent_dim:
+                hidden_dims.append(dim)
+                dim *= 2
         
         layers = []
         prev_dim = input_dim
@@ -38,8 +43,13 @@ class Decoder(nn.Module):
     def __init__(self, latent_dim, output_dim, hidden_dims=None, dropout=0.1):
         super().__init__()
         
+        # Progressive contraction: (latent) -> ... -> 2048 -> 1024 -> 512 -> (output)
         if hidden_dims is None:
-            hidden_dims = [output_dim // 4, output_dim // 2]
+            hidden_dims = []
+            dim = latent_dim // 2
+            while dim > output_dim:
+                hidden_dims.append(dim)
+                dim //= 2
         
         layers = []
         prev_dim = latent_dim
@@ -74,8 +84,9 @@ class Autoencoder(pl.LightningModule):
         self.weight_decay = weight_decay
         # Set up dimensions
         if hidden_dims is None:
-            encoder_dims = [input_dim // 2, input_dim // 4]
-            decoder_dims = [input_dim // 4, input_dim // 2]
+            # Defer to Encoder/Decoder defaults (progressive doubling/halving)
+            encoder_dims = None
+            decoder_dims = None
         else:
             encoder_dims = hidden_dims
             decoder_dims = hidden_dims[::-1]
