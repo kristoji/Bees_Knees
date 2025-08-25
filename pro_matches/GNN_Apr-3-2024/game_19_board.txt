@@ -1,1 +1,0 @@
-Base+MLP;InProgress;White[20];wS1;bB1 /wS1;wG1 wS1/;bG1 bB1\;wA1 wG1\;bQ -bG1;wQ \wS1;bS1 bQ\;wS2 wA1\;bB2 -bQ;wS2 bG1\;bG1 /wQ;wA1 -bB2;bS2 \bQ;wQ \wG1;bG1 wG1\;wG2 wQ-;bS2 -wQ;wB1 wS2/;bA1 bG1-;wG2 /bQ;bA1 wQ-;wB1 bQ-;bS1 -wG2;wB2 wG2\;bG1 \wQ;wB2 wG2;bB2 wB2;wG3 wB1-;bA2 bG1/;wG3 -bQ;bS1 \wA1;wA2 wB1-;bA2 wA2-;wA3 wG1\;bA1 wA3-;wS2 bA2-;bG2 /bB2

@@ -1,1 +1,0 @@
-Base+MLP;Draw;Black[19];wL;bA1 /wL;wP wL-;bG1 /bA1;wQ \wP;bG2 /bG1;wA1 wQ-;bQ bA1\;wA1 bQ\;bG2 wQ/;wS1 wP-;bB1 \bG2;wS1 bB1-;bB1 \wQ;wA2 wP\;bG1 wS1/;wA2 /bQ;bA2 bG1/;wB1 wA1\;bA2 wP\;wS2 -wB1;bG3 bA2\;wB1 wA1;bB1 wQ;wB1 bQ;bA3 -bA1;wS2 /bA1;bA3 \bB1;wG1 -wS2;bB2 bA2-;wG1 -bG3;bA1 -wL;wG2 wA1\;bB1 wP/;wQ -bA2;bG3 \wP;wB1 bA1\
