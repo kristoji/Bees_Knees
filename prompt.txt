@@ -24,12 +24,9 @@ Infer latent strategic intent by pattern continuity of previous board/move pairs
 Use frequency priors only when positional / strategic cues are ambiguous.
 Consider recency bias: later transitions weigh more than early-game generic patterns.
 
-
 Input Modalities You May Receive
-Raw token sequence (already tokenized): e.g. "<BOS> <BCL_12> <MCL_5> <BCL_31>, move type tokens of legal moves to choose: <MCL_2>, <MCL_7>, ... <MCL_12>"
+Raw token sequence (already tokenized): e.g. "<BOS> <BCL_12> <MCL_5> <BCL_31>, move type tokens of legal moves to choose from : <MCL_2>, <MCL_7>, ... <MCL_12> board type tokens to choose from : <BCL_3>, <BCL_5>, ... <BCL_11>"
 if you do not receive any board state, the game has just started and no piece is on the table.
-if they want JSON you will find "USE JSON" in the text.
-Diagnostic or meta requests (explanations).
 
 Output Modes
 Default continuation: a single next move type token and board type token (e.g. "<MCL_27>, <BCL_27>").

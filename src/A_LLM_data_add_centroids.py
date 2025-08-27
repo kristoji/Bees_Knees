@@ -285,10 +285,10 @@ def main():  # noqa: C901
     ap.add_argument('--k-min', type=int, default=11, help='Global minimum k (used if per-type not provided)')
     ap.add_argument('--k-max', type=int, default=16, help='Global maximum k (used if per-type not provided)')
     # Optional per-type overrides
-    ap.add_argument('--board-k-min', type=int, default=None, help='Override minimum k for board embeddings')
-    ap.add_argument('--board-k-max', type=int, default=None, help='Override maximum k for board embeddings')
-    ap.add_argument('--move-k-min', type=int, default=None, help='Override minimum k for move embeddings')
-    ap.add_argument('--move-k-max', type=int, default=None, help='Override maximum k for move embeddings')
+    ap.add_argument('--board-k-min', type=int, default=10, help='Override minimum k for board embeddings')
+    ap.add_argument('--board-k-max', type=int, default=12, help='Override maximum k for board embeddings')
+    ap.add_argument('--move-k-min', type=int, default=10, help='Override minimum k for move embeddings')
+    ap.add_argument('--move-k-max', type=int, default=14, help='Override maximum k for move embeddings')
     ap.add_argument('--n-init', type=int, default=8)
     ap.add_argument('--max-iter', type=int, default=300)
     ap.add_argument('--sample-fraction', type=float, default=1.0, help='Global fraction of embeddings to use (0-1] (used if per-type not provided)')
@@ -450,6 +450,14 @@ def _augment_caches_with_clusters(cache_paths: List[str], computed_centroids: Di
         # Load original cache
         with open(cache_path, 'rb') as f:
             samples = pickle.load(f)
+
+        # Remove any previous centroid mapping entries to avoid duplicates
+        # (identified by sentinel key 'is_cluster_centroid_mapping')
+        original_len = len(samples)
+        samples = [s for s in samples if not (isinstance(s, dict) and s.get('is_cluster_centroid_mapping'))]
+        removed = original_len - len(samples)
+        if removed > 0:
+            print(f"  Removed {removed} existing centroid mapping entr(y/ies) to prevent duplication")
         
         # Augment each sample with cluster assignments
         for sample in samples:
@@ -513,6 +521,35 @@ def _augment_caches_with_clusters(cache_paths: List[str], computed_centroids: Di
             pickle.dump(samples, f)
         
         print(f"  Saved augmented cache: {output_path}")
+
+        # Append (in a second step) a single centroid mapping entry so that
+        # downstream data loaders can quickly access centroid embeddings
+        # without reloading separate clustering artifacts. This mapping is
+        # global for the dataset, so we store it once.
+        mapping_entry = {
+            'is_cluster_centroid_mapping': True,
+            'similarity_metric': similarity_metric,
+            'created_at': datetime.utcnow().isoformat() + 'Z',
+        }
+        if 'board' in computed_centroids:
+            board_cents = computed_centroids['board']
+            # Provide both array and explicit id->embedding dict (list of lists) for flexibility
+            mapping_entry['board_centroids'] = board_cents.astype(np.float32)
+            mapping_entry['board_cluster_id_to_embedding'] = {int(i): board_cents[i].astype(np.float32) for i in range(board_cents.shape[0])}
+            mapping_entry['num_board_centroids'] = board_cents.shape[0]
+            mapping_entry['board_embedding_dim'] = board_cents.shape[1]
+        if 'move' in computed_centroids:
+            move_cents = computed_centroids['move']
+            mapping_entry['move_centroids'] = move_cents.astype(np.float32)
+            mapping_entry['move_cluster_id_to_embedding'] = {int(i): move_cents[i].astype(np.float32) for i in range(move_cents.shape[0])}
+            mapping_entry['num_move_centroids'] = move_cents.shape[0]
+            mapping_entry['move_embedding_dim'] = move_cents.shape[1]
+
+        # Save mapping entry as a separate pickle alongside augmented cache for easier direct loading
+        mapping_pickle_path = f"{base_path}{output_suffix}_centroid_mapping.pkl"
+        with open(mapping_pickle_path, 'wb') as f:
+            pickle.dump(mapping_entry, f)
+        print(f"  Saved centroid mapping entry: {mapping_pickle_path}")
 
 
 if __name__ == '__main__':
