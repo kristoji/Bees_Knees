@@ -131,13 +131,13 @@ class HiveLLMConfig:
     weight_decay: float = 0.01
     max_grad_norm: float = 1.0
     log_every: int = 1
-    eval_every: int = 200
+    eval_every: int = 50
     save_every: int = 0
     lr_scheduler: str = "cosine"
     seed: int = 42
 
     # Logging of IO/predictions
-    log_preds_every: int = 1
+    log_preds_every: int = 0
     max_log_samples: int = 4
     decode_max_chars: int = 500
     verify_token_addition: bool = True  # New flag for token verification
@@ -165,7 +165,7 @@ class HiveLLMConfig:
     loss_on_cluster_tokens_only: bool = True
 
     # Other
-    system_prompt_path: Optional[str] = "src/prompts/prompt_simplified.txt"
+    system_prompt_path: Optional[str] = "src/prompts/prompt.txt"
     user_prompt_prefix: str = "Sequence:"
     verbose: bool = False
     use_cache: bool = False
@@ -178,7 +178,11 @@ class HiveLLMConfig:
 
     enable_progressive_masking: bool = True
     min_context_length: int = 1
-
+    prediction_fractions: List[float] = field(default_factory=lambda: [0.25 , 0.75 , 0.95, 1.0])  # Predict at these fractions of the game
+    
+    # New flags
+    run_validation: bool = False  # Whether to compute validation during training
+    data_size: float = 1.0        # Fraction of data to load (applied before progressive indexing)
 
 class JSONLogitsProcessor(LogitsProcessor):
     """Constrain generation to valid JSON format for move/board predictions"""
@@ -255,7 +259,7 @@ class GameClusterSequenceDataset(Dataset):
         if pretokenize:
             self._pretokenize_dataset(save_pretok_path)
     def _build_progressive_index_mapping(self):
-        """Build mapping from linear index to (game_idx, prediction_position)"""
+        """Build mapping from linear index to (game_idx, prediction_position) based on prediction_fractions"""
         self.index_map = []
         
         for game_idx, sample in enumerate(self.samples):
@@ -266,13 +270,21 @@ class GameClusterSequenceDataset(Dataset):
             # Number of valid prediction positions for this game
             max_predictions = min(move_seq_len, board_seq_len - 1)  # Need board_seq[i+1] for target
             
-            # Create entries for each valid prediction position
-            for pred_pos in range(self.config.min_context_length, max_predictions):
-                self.index_map.append((game_idx, pred_pos))
+            if max_predictions < self.config.min_context_length:
+                continue  # Skip games that are too short
+            
+            # For each specified fraction, compute the prediction position
+            for fraction in self.config.prediction_fractions:
+                # Calculate position as a fraction of max_predictions
+                pred_pos = int(fraction * max_predictions)
+                # Clamp to valid range (ensure at least min_context_length and at most max_predictions - 1)
+                pred_pos = max(self.config.min_context_length, min(pred_pos, max_predictions - 1))
+                
+                # Only add if it's a valid position
+                if pred_pos < max_predictions:
+                    self.index_map.append((game_idx, pred_pos))
         
-        logger.info(f"Built progressive index mapping: {len(self.index_map)} total prediction samples")
-
-
+        logger.info(f"Built progressive index mapping with {len(self.index_map)} prediction samples at fractions: {self.config.prediction_fractions}")
     def _pretokenize_dataset(self, save_path: Optional[str] = None):
         """Pretokenize all samples (now handles progressive indexing)"""
         logger.info("Pretokenizing dataset...")
@@ -376,19 +388,21 @@ class GameClusterSequenceDataset(Dataset):
             if board_token and move_token:
                 context_parts.append(f"{player}: {board_token} {move_token}")
         
-        # Add available legal moves
-        context_parts.append(" Next legal moves: ")
-        for x in next_legal_moves:
-            move_token = self.move_tokens[x] if 0 <= x < self.num_move else ""
-            context_parts.append(f"- {move_token}")
-
-        context_parts.append("\n Current board state: ")
+        context_parts.append(" Current board state: ")
         # Add the board state before the target move
         target_player = "Player 1" if target_move_idx % 2 == 0 else "Player 2"
         target_board_before = self.board_tokens[b_seq[target_move_idx]] if 0 <= b_seq[target_move_idx] < self.num_board else ""
         
         if target_board_before:
             context_parts.append(f"{target_player}: {target_board_before}")
+
+        # Add available legal moves
+        context_parts.append(" Choose ONE move among the following LEGAL moves: ")
+        for x in next_legal_moves:
+            move_token = self.move_tokens[x] if 0 <= x < self.num_move else ""
+            context_parts.append(f"- {move_token}")
+
+
 
         # Build JSON target
         target_move = self.move_tokens[m_seq[target_move_idx]] if 0 <= m_seq[target_move_idx] < self.num_move else "null"
@@ -1064,6 +1078,24 @@ def train_model(config: HiveLLMConfig):
     
     logger.info(f"Loaded {len(train_samples)} train, {len(val_samples)} val samples")
 
+    # Apply data size partitioning BEFORE building progressive indices
+    def partition_samples(samples: List[Dict], frac: float) -> List[Dict]:
+        if not samples:
+            return samples
+        if frac >= 1.0:
+            return samples
+        if frac <= 0.0:
+            return []
+        keep = max(1, int(len(samples) * frac))
+        # Deterministic head partition to keep reproducible behavior
+        return samples[:keep]
+
+    if config.data_size != 1.0:
+        orig_train, orig_val = len(train_samples), len(val_samples)
+        train_samples = partition_samples(train_samples, config.data_size)
+        val_samples = partition_samples(val_samples, config.data_size)
+        logger.info(f"Data partitioning applied (data_size={config.data_size}): train {orig_train}->{len(train_samples)}, val {orig_val}->{len(val_samples)}")
+
     # Load system prompt
     system_prompt = None
     if config.system_prompt_path and os.path.exists(config.system_prompt_path):
@@ -1074,6 +1106,10 @@ def train_model(config: HiveLLMConfig):
         logger.info(f"System prompt:\n{system_prompt if system_prompt else '[None]'}")
 
     # Create datasets
+    # Avoid loading full pretokenized caches when using partial data
+    train_load_pretok = config.pretokenized_train_cache_path if config.data_size >= 1.0 else None
+    val_load_pretok = config.pretokenized_val_cache_path if config.data_size >= 1.0 else None
+
     train_dataset = GameClusterSequenceDataset(
         train_samples,
         model.board_cluster_tokens,
@@ -1082,12 +1118,12 @@ def train_model(config: HiveLLMConfig):
         config=config,
         system_prompt=system_prompt,
         pretokenize=config.pretokenize,
-        save_pretok_path=config.pretokenized_train_cache_path,
-        load_pretok_path=config.pretokenized_train_cache_path,
+        save_pretok_path=config.pretokenized_train_cache_path if config.data_size >= 1.0 else None,
+        load_pretok_path=train_load_pretok,
     )
 
     val_dataset = None
-    if val_samples:
+    if config.run_validation and val_samples:
         val_dataset = GameClusterSequenceDataset(
             val_samples,
             model.board_cluster_tokens,
@@ -1096,8 +1132,8 @@ def train_model(config: HiveLLMConfig):
             config=config,
             system_prompt=system_prompt,
             pretokenize=config.pretokenize,
-            save_pretok_path=config.pretokenized_val_cache_path,
-            load_pretok_path=config.pretokenized_val_cache_path,
+            save_pretok_path=config.pretokenized_val_cache_path if config.data_size >= 1.0 else None,
+            load_pretok_path=val_load_pretok,
         )
 
     # Create dataloaders
@@ -1209,7 +1245,22 @@ def train_model(config: HiveLLMConfig):
                     logger.info(
                         f"Step {global_step}: loss={metrics['loss']:.4f}, ppl={metrics['ppl']:.2f}, lr={lr:.2e}{mem_txt}"
                     )
-                
+
+                if config.run_validation and val_loader and global_step % config.eval_every == 0:
+                    model.eval()
+                    val_loss = 0.0
+                    val_steps = 0
+                    with torch.no_grad():
+                        for val_batch in val_loader:
+                            val_batch = {k: v.to(device, non_blocking=True) for k, v in val_batch.items()}
+                            with autocast_ctx:
+                                loss, _ = model.training_step(val_batch)
+                            val_loss += loss.item()
+                            val_steps += 1
+                    avg_val_loss = val_loss / max(1, val_steps)
+                    val_ppl = math.exp(avg_val_loss) if avg_val_loss < 50 else float('inf')
+                    logger.info(f"Validation @ Step {global_step}: loss={avg_val_loss:.4f}, ppl={val_ppl:.2f}")
+                    model.train()
                 # Log predictions
                 if config.log_preds_every > 0 and global_step % config.log_preds_every == 0:
                     _decode_and_log_examples(model, batch, global_step, config)
@@ -1254,6 +1305,9 @@ def main():
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--pretok_train', type=str)
     parser.add_argument('--pretok_val', type=str)
+    # New CLI flags
+    parser.add_argument('--validation', action='store_true', help='Run validation during training')
+    parser.add_argument('--data_size', type=float, default=None, help='Fraction of data to load (0-1) before building prediction fractions')
     args = parser.parse_args()
 
     config = HiveLLMConfig()
@@ -1295,6 +1349,15 @@ def main():
         config.pretokenized_train_cache_path = args.pretok_train
     if args.pretok_val:
         config.pretokenized_val_cache_path = args.pretok_val
+    if args.validation:
+        config.run_validation = True
+    if args.data_size is not None:
+        # Clamp to [0,1]
+        try:
+            config.data_size = float(max(0.0, min(1.0, args.data_size)))
+        except Exception:
+            logger.warning(f"Invalid --data_size {args.data_size}; defaulting to 1.0")
+            config.data_size = 1.0
 
     os.makedirs(config.output_dir, exist_ok=True)
     log_file = os.path.join("logs", "training.log")
