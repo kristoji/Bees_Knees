@@ -16,6 +16,9 @@ CLUSTER_DIR = $(BIG_CLUSTER_DIR)
 
 SRC_DIR = src
 
+#OUTPUT_DIR = models\\LLM_gpt_oss
+OUTPUT_DIR = models\\LLM_gemma3_12b
+LLM_DIR = ${OUTPUT_DIR}\\checkpoint_epoch2
 # Default target
 
 venv:
@@ -26,11 +29,19 @@ data:
 k-means:
 	python $(SRC_DIR)\\A_LLM_data_add_centroids.py --caches $(DATA_DIR)\\train_sequential_cache.pkl $(DATA_DIR)\\validation_sequential_cache.pkl --types board move --augment-caches --fit-on-subset --subset-fraction 0.3 --subset-max 100000 --output-root $(CLUSTER_DIR)
 
-
 train:
-	python $(SRC_DIR)\\A_LLM_trainer.py --train_cache $(DATA_DIR)\\train_sequential_cache_clustered.pkl	--val_cache $(DATA_DIR)\\validation_sequential_cache_clustered.pkl --board_centroids $(CLUSTER_DIR)\\boards\\cluster_centroids_kmeans_best.pkl --move_centroids $(CLUSTER_DIR)\\moves\\cluster_centroids_kmeans_best.pkl --epochs 2 --lr 0.00001 --batch_size 1 --output_dir models\\LLM_gpt_oss --output_format json --add_descriptions --verify_tokens --data_size 0.1 
+	python $(SRC_DIR)\\A_LLM_trainer.py --train_cache $(DATA_DIR)\\train_sequential_cache_clustered.pkl	--val_cache $(DATA_DIR)\\validation_sequential_cache_clustered.pkl --board_centroids $(CLUSTER_DIR)\\boards\\cluster_centroids_kmeans_best.pkl --move_centroids $(CLUSTER_DIR)\\moves\\cluster_centroids_kmeans_best.pkl --epochs 2 --lr 0.00001 --batch_size 1 --output_dir $(OUTPUT_DIR) --output_format json --add_descriptions --verify_tokens --data_size 0.3
+
+tokenizer:
+	python $(SRC_DIR)\\A_LLM_tokenizer_test.py --tokenizer $(LLM_DIR)\\tokenizer
+
+inference:
+	python $(SRC_DIR)\\A_LLM_inference.py --model_dir $(LLM_DIR) --system_prompt $(SRC_DIR)\\prompts\\prompt.txt --max_new_tokens 5000 --verbose
+
+duel:
+	python $(SRC_DIR)\\A_LLM_inference_duel.py --model-dir $(LLM_DIR) --gnn-model $(GNN_PATH) --num-games 5 --llm-color black --output-dir duel_results\\llm_vs_random --max-moves 150
 
 nothing:
 	neofetch
 
-.PHONY: nothing data train venv 
+.PHONY: nothing data train inference venv duel

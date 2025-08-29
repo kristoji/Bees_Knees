@@ -95,7 +95,7 @@ def setup_logging(log_path: str, to_stdout: bool = True, level=logging.INFO, als
 class HiveLLMConfig:
     """Configuration for HIVE LLM with JSON output"""
     # Model
-    base_model_name: str = "unsloth/gpt-oss-20b-unsloth-bnb-4bit"
+    base_model_name: str =  "unsloth/gemma-3-12b-it-unsloth-bnb-4bit"#"unsloth/Llama-3.2-3B-Instruct-bnb-4bit"#"unsloth/gemma-3-4b-it-unsloth-bnb-4bit"# #"unsloth/gpt-oss-20b-unsloth-bnb-4bit"
     
     # JSON Output
     output_format: str = "json"  # "json" or "text"
@@ -125,14 +125,14 @@ class HiveLLMConfig:
     max_seq_length: int = 512
     learning_rate: float = 5e-4
     batch_size: int = 2
-    epochs: int = 1
+    epochs: int = 2
     grad_accumulation_steps: int = 16
     warmup_steps: int = 50
     weight_decay: float = 0.01
     max_grad_norm: float = 1.0
     log_every: int = 1
-    eval_every: int = 50
-    save_every: int = 0
+    eval_every: int = 1
+    save_every: int = 1
     lr_scheduler: str = "cosine"
     seed: int = 42
 
@@ -178,7 +178,7 @@ class HiveLLMConfig:
 
     enable_progressive_masking: bool = True
     min_context_length: int = 1
-    prediction_fractions: List[float] = field(default_factory=lambda: [0.25 , 0.75 , 0.95, 1.0])  # Predict at these fractions of the game
+    prediction_fractions: List[float] = field(default_factory=lambda: [0.05 , 0.25, 0.55, 0.75, 0.95])  # Predict at these fractions of the game
     
     # New flags
     run_validation: bool = False  # Whether to compute validation during training
@@ -208,7 +208,7 @@ class JSONLogitsProcessor(LogitsProcessor):
         # This is a simplified version - in production you'd want more sophisticated parsing
         return scores
 
-
+# Reintroduce the dataset (Processor-aware: uses base_tokenizer for ids/labels)
 class GameClusterSequenceDataset(Dataset):
     """Dataset for cluster token sequences with JSON output format"""
 
@@ -227,17 +227,19 @@ class GameClusterSequenceDataset(Dataset):
         self.samples = samples
         self.board_tokens = board_tokens
         self.move_tokens = move_tokens
-        self.tokenizer = tokenizer
+        self.tokenizer = tokenizer  # can be Processor or plain tokenizer
+        self.base_tokenizer = getattr(tokenizer, "tokenizer", tokenizer)  # always a text tokenizer
         self.config = config
         self.system_prompt = system_prompt
         self.num_board = len(board_tokens)
         self.num_move = len(move_tokens)
         self._encoded: Optional[List[Dict[str, torch.Tensor]]] = None
+
         if config.enable_progressive_masking:
             self._build_progressive_index_mapping()
         else:
-            # Original behavior: one sample per game (last position only)
             self.index_map = [(i, None) for i in range(len(samples))]
+
         # Load pretokenized cache if available
         if load_pretok_path and os.path.exists(load_pretok_path):
             logger.info(f"Loading pretokenized dataset from: {load_pretok_path}")
@@ -258,42 +260,29 @@ class GameClusterSequenceDataset(Dataset):
         # Pretokenize if requested
         if pretokenize:
             self._pretokenize_dataset(save_pretok_path)
+
     def _build_progressive_index_mapping(self):
         """Build mapping from linear index to (game_idx, prediction_position) based on prediction_fractions"""
         self.index_map = []
-        
         for game_idx, sample in enumerate(self.samples):
-            # Get sequence lengths from the sample
             board_seq_len = len(self._norm_seq(sample.get('board_cluster_ids_sequence', [])))
             move_seq_len = len(self._norm_seq(sample.get('chosen_move_cluster_ids_sequence', [])))
-            
-            # Number of valid prediction positions for this game
-            max_predictions = min(move_seq_len, board_seq_len - 1)  # Need board_seq[i+1] for target
-            
+            max_predictions = min(move_seq_len, board_seq_len - 1)
             if max_predictions < self.config.min_context_length:
-                continue  # Skip games that are too short
-            
-            # For each specified fraction, compute the prediction position
+                continue
             for fraction in self.config.prediction_fractions:
-                # Calculate position as a fraction of max_predictions
                 pred_pos = int(fraction * max_predictions)
-                # Clamp to valid range (ensure at least min_context_length and at most max_predictions - 1)
                 pred_pos = max(self.config.min_context_length, min(pred_pos, max_predictions - 1))
-                
-                # Only add if it's a valid position
                 if pred_pos < max_predictions:
                     self.index_map.append((game_idx, pred_pos))
-        
         logger.info(f"Built progressive index mapping with {len(self.index_map)} prediction samples at fractions: {self.config.prediction_fractions}")
+
     def _pretokenize_dataset(self, save_path: Optional[str] = None):
         """Pretokenize all samples (now handles progressive indexing)"""
         logger.info("Pretokenizing dataset...")
         self._encoded = []
-        
-        # Use the actual dataset length (which accounts for progressive indexing)
         total_samples = len(self.index_map)
         iterator = tqdm(range(total_samples), desc="Pretokenizing") if _HAS_TQDM else range(total_samples)
-        
         for idx in iterator:
             item = self._encode_item(idx)
             self._encoded.append({
@@ -301,12 +290,8 @@ class GameClusterSequenceDataset(Dataset):
                 'attention_mask': item['attention_mask'],
                 'labels': item['labels'],
             })
-            
-            # Log sample compositions
             if self.config.verbose and idx < 3:
                 self._log_sample_composition(item, idx)
-        
-        # Save pretokenized cache
         if save_path:
             self._save_pretokenized(save_path)
 
@@ -315,7 +300,6 @@ class GameClusterSequenceDataset(Dataset):
         chat = item.get('chat', [])
         user_content = next((m['content'] for m in chat if m.get('role') == 'user'), '')
         assistant_content = next((m['content'] for m in chat if m.get('role') == 'assistant'), '')
-        
         logger.info(f"\n[Sample {idx+1}] Composition:")
         logger.info(f"  User input: {user_content[:200]}...")
         logger.info(f"  Target output: {assistant_content}")
@@ -352,71 +336,48 @@ class GameClusterSequenceDataset(Dataset):
             return list(x)
         return []
 
-    def _build_next_pair_json(self, b_seq: List[int], m_seq: List[int], l_seq: List[List[int]], 
-                             prediction_position: Optional[int] = None) -> Tuple[str, str]:
+    def _build_next_pair_json(self, b_seq: List[int], m_seq: List[int], l_seq: List[List[int]],
+                              prediction_position: Optional[int] = None) -> Tuple[str, str]:
         """Build context and JSON target for specific prediction position (or last position if None)"""
-        
         if len(b_seq) < 2 or len(m_seq) < 1:
             return "", '{"move": null, "board": null}'
-
         pairs = min(len(m_seq), len(b_seq) - 1)
         if pairs < 1:
             return "", '{"move": null, "board": null}'
 
-        # NEW: Use prediction_position if provided, otherwise use last position
         if prediction_position is not None:
             target_move_idx = prediction_position
             if target_move_idx >= pairs:
                 return "", '{"move": null, "board": null}'
         else:
-            # Original behavior: predict second-to-last move
             target_move_idx = pairs - 1
 
-        # Build context with merged player format up to target_move_idx
         context_parts = []
-
-        # Get legal moves at prediction position
         next_legal_moves = l_seq[target_move_idx] if target_move_idx < len(l_seq) else []
-        next_legal_moves = list(dict.fromkeys(next_legal_moves))  # Remove duplicates while preserving order
+        next_legal_moves = list(dict.fromkeys(next_legal_moves))
 
-        # Add historical moves BEFORE the prediction position
         for i in range(target_move_idx):
             player = "Player 1" if i % 2 == 0 else "Player 2"
             board_token = self.board_tokens[b_seq[i]] if 0 <= b_seq[i] < self.num_board else ""
             move_token = self.move_tokens[m_seq[i]] if 0 <= m_seq[i] < self.num_move else ""
-            
             if board_token and move_token:
                 context_parts.append(f"{player}: {board_token} {move_token}")
-        
+
         context_parts.append(" Current board state: ")
-        # Add the board state before the target move
         target_player = "Player 1" if target_move_idx % 2 == 0 else "Player 2"
         target_board_before = self.board_tokens[b_seq[target_move_idx]] if 0 <= b_seq[target_move_idx] < self.num_board else ""
-        
         if target_board_before:
             context_parts.append(f"{target_player}: {target_board_before}")
 
-        # Add available legal moves
         context_parts.append(" Choose ONE move among the following LEGAL moves: ")
         for x in next_legal_moves:
             move_token = self.move_tokens[x] if 0 <= x < self.num_move else ""
             context_parts.append(f"- {move_token}")
 
-
-
-        # Build JSON target
         target_move = self.move_tokens[m_seq[target_move_idx]] if 0 <= m_seq[target_move_idx] < self.num_move else "null"
         target_board = self.board_tokens[b_seq[target_move_idx + 1]] if target_move_idx + 1 < len(b_seq) and 0 <= b_seq[target_move_idx + 1] < self.num_board else "null"
-        
-        if self.config.output_format == "json":
-            target = json.dumps({
-                "move": target_move,
-                "board": target_board
-            })
-        else:
-            target = f"{target_move} {target_board}"
-
-        context = "  ".join(context_parts)  # Using double space as separator for clarity
+        target = json.dumps({"move": target_move, "board": target_board})
+        context = "  ".join(context_parts)
         return context, target
 
     def __len__(self):
@@ -430,28 +391,24 @@ class GameClusterSequenceDataset(Dataset):
         return self._encode_item(idx)
 
     def _encode_item(self, idx):
-        # NEW: Decode linear index to (game_idx, prediction_position)
         game_idx, prediction_position = self.index_map[idx]
-        sample = self.samples[game_idx]        
+        sample = self.samples[game_idx]
         b_seq = self._norm_seq(sample.get('board_cluster_ids_sequence'))
         m_seq = self._norm_seq(sample.get('chosen_move_cluster_ids_sequence'))
         l_seq = self._norm_seq(sample.get('legal_move_cluster_ids_sequence'))
-        # Build context and target for this specific prediction position
+
         if self.config.enable_progressive_masking and prediction_position is not None:
             context, target = self._build_next_pair_json(b_seq, m_seq, l_seq, prediction_position)
         else:
-            # Original behavior (predict last position)
             context, target = self._build_next_pair_json(b_seq, m_seq, l_seq)
-        # Build chat
+
         chat = []
         if self.system_prompt:
             modified_prompt = self.system_prompt
             chat.append({"role": "system", "content": modified_prompt})
-
         chat.append({"role": "user", "content": context})
         chat.append({"role": "assistant", "content": target})
 
-        # Apply chat template
         try:
             rendered = self.tokenizer.apply_chat_template(
                 chat,
@@ -465,7 +422,6 @@ class GameClusterSequenceDataset(Dataset):
                 content = msg.get('content', '')
                 rendered += f"<|{role}|>: {content}\n"
 
-        # Tokenize
         encoding = self.tokenizer(
             rendered,
             return_tensors='pt',
@@ -476,16 +432,14 @@ class GameClusterSequenceDataset(Dataset):
         input_ids = encoding['input_ids'][0]
         attention_mask = encoding['attention_mask'][0]
 
-        # Label masking for training only on assistant response
         labels = input_ids.clone()
-        assistant_tokens = self.tokenizer(
+        assistant_tokens = self.base_tokenizer(
             target,
             add_special_tokens=False,
             return_tensors='pt',
         )['input_ids'][0]
-        
+
         if len(assistant_tokens) > 0:
-            # Find assistant response in full sequence
             found = False
             for start_idx in range(len(input_ids) - len(assistant_tokens), -1, -1):
                 if torch.equal(input_ids[start_idx:start_idx + len(assistant_tokens)], assistant_tokens):
@@ -493,7 +447,6 @@ class GameClusterSequenceDataset(Dataset):
                     found = True
                     break
             if not found:
-                # Fallback: mask first 70% of sequence
                 cutoff = int(len(labels) * 0.7)
                 labels[:cutoff] = -100
         else:
@@ -510,29 +463,34 @@ class GameClusterSequenceDataset(Dataset):
 
     @staticmethod
     def collate(batch: List[Dict]) -> Dict[str, torch.Tensor]:
-        """Collate batch with right-padding"""
-        max_len = max(x['input_ids'].size(0) for x in batch)
-        pad_token_id = 0
+        """Collate batch with right-padding (safe across mismatched field lengths)"""
+        # Compute max length across all three fields to avoid negative padding
+        max_ids = max(x['input_ids'].size(0) for x in batch)
+        max_mask = max(x['attention_mask'].size(0) for x in batch)
+        max_labels = max(x['labels'].size(0) for x in batch)
+        final_len = max(max_ids, max_mask, max_labels)
 
-        def pad(t: torch.Tensor, pad_value: int = 0):
-            if t.size(0) == max_len:
+        pad_token_id = 0  # keep as 0; labels and mask will handle ignored positions
+
+        def pad_to(t: torch.Tensor, length: int, pad_value: int = 0):
+            if t.size(0) == length:
                 return t
-            return torch.cat([
-                t,
-                torch.full((max_len - t.size(0),), pad_value, dtype=t.dtype)
-            ], dim=0)
+            if t.size(0) > length:
+                return t[:length]
+            return torch.cat([t, torch.full((length - t.size(0),), pad_value, dtype=t.dtype)], dim=0)
 
-        input_ids = torch.stack([pad(b['input_ids'], pad_token_id) for b in batch])
-        attention_mask = torch.stack([pad(b['attention_mask'], 0) for b in batch])
-        labels = torch.stack([pad(b['labels'], -100) for b in batch])
+        input_ids = torch.stack([pad_to(b['input_ids'], final_len, pad_token_id) for b in batch])
+        attention_mask = torch.stack([pad_to(b['attention_mask'], final_len, 0) for b in batch])
+        labels = torch.stack([pad_to(b['labels'], final_len, -100) for b in batch])
+
+        # Ensure labels are ignored where attention_mask == 0
         labels = labels.masked_fill(attention_mask == 0, -100)
-        
+
         return {
             'input_ids': input_ids,
             'attention_mask': attention_mask,
             'labels': labels,
         }
-
 
 class HiveLLMModel(nn.Module):
     """HIVE LLM model with JSON output support and token verification"""
@@ -579,16 +537,28 @@ class HiveLLMModel(nn.Module):
                 random_state=self.config.seed,
             )
             self.base_model = model
-            self.tokenizer = tokenizer
+            # Handle Gemma3Processor vs plain tokenizer
+            self.processor = None
+            self.tokenizer = tokenizer  # chat tokenizer (could be Processor)
+            self.base_tokenizer = tokenizer
+            if not hasattr(self.tokenizer, "add_tokens") and hasattr(self.tokenizer, "tokenizer"):
+                # Gemma3Processor case
+                self.processor = self.tokenizer
+                self.base_tokenizer = self.processor.tokenizer
+            # Ensure PAD token on the base tokenizer
+            if self.base_tokenizer.pad_token is None:
+                self.base_tokenizer.pad_token = self.base_tokenizer.eos_token
+                self.base_tokenizer.pad_token_id = self.base_tokenizer.eos_token_id
             # Cast LoRA adapters immediately after attaching PEFT
             self._ensure_lora_dtype()
         else:
             logger.warning("Unsloth not available, falling back to HF loading")
             self._load_standard_hf()
 
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        # Ensure pad token available on HF fallback path too
+        if getattr(self, "base_tokenizer", None) and self.base_tokenizer.pad_token is None:
+            self.base_tokenizer.pad_token = self.base_tokenizer.eos_token
+            self.base_tokenizer.pad_token_id = self.base_tokenizer.eos_token_id
 
     def _load_standard_hf(self):
         """Load model using standard HuggingFace"""
@@ -597,6 +567,9 @@ class HiveLLMModel(nn.Module):
             trust_remote_code=True,
             padding_side="left",
         )
+        # In HF fallback, tokenizer is already a plain tokenizer
+        self.processor = None
+        self.base_tokenizer = self.tokenizer
         bnb_config = None
         if self.config.use_4bit:
             bnb_config = BitsAndBytesConfig(
@@ -665,53 +638,34 @@ class HiveLLMModel(nn.Module):
     def _verify_tokens(self):
         """Verify that cluster tokens are properly added to vocabulary"""
         logger.info("\n=== Verifying Token Addition ===")
-        
+        tok = getattr(self, "base_tokenizer", self.tokenizer)
         # Check vocabulary size
-        vocab_size = len(self.tokenizer)
+        vocab_size = len(tok)
         logger.info(f"Total vocabulary size: {vocab_size}")
-        
         # Verify board tokens
         if hasattr(self, 'board_cluster_tokens'):
             logger.info(f"\nBoard tokens ({len(self.board_cluster_tokens)}):")
             for i, token in enumerate(self.board_cluster_tokens[:5]):  # Show first 5
-                token_id = self.tokenizer.convert_tokens_to_ids(token)
-                decoded = self.tokenizer.decode([token_id])
+                token_id = tok.convert_tokens_to_ids(token)
+                decoded = tok.decode([token_id])
                 logger.info(f"  {token} -> ID: {token_id}, Decoded: '{decoded}'")
-            
             # Test encoding/decoding
-            test_text = f"Test: {self.board_cluster_tokens[0]} {self.board_cluster_tokens[1]}"
-            encoded = self.tokenizer.encode(test_text)
-            decoded = self.tokenizer.decode(encoded)
-            logger.info(f"\nTest encode/decode:")
-            logger.info(f"  Original: '{test_text}'")
-            logger.info(f"  Encoded: {encoded}")
-            logger.info(f"  Decoded: '{decoded}'")
-        
+            if len(self.board_cluster_tokens) >= 2:
+                test_text = f"Test: {self.board_cluster_tokens[0]} {self.board_cluster_tokens[1]}"
+                encoded = tok.encode(test_text)
+                decoded = tok.decode(encoded)
+                logger.info(f"\nTest encode/decode:")
+                logger.info(f"  Original: '{test_text}'")
+                logger.info(f"  Encoded: {encoded}")
+                logger.info(f"  Decoded: '{decoded}'")
         # Verify move tokens
         if hasattr(self, 'move_cluster_tokens'):
             logger.info(f"\nMove tokens ({len(self.move_cluster_tokens)}):")
             for i, token in enumerate(self.move_cluster_tokens[:5]):  # Show first 5
-                token_id = self.tokenizer.convert_tokens_to_ids(token)
-                decoded = self.tokenizer.decode([token_id])
+                token_id = tok.convert_tokens_to_ids(token)
+                decoded = tok.decode([token_id])
                 logger.info(f"  {token} -> ID: {token_id}, Decoded: '{decoded}'")
-        
         logger.info("=== Token Verification Complete ===\n")
-
-    def _log_device_info(self):
-        """Log GPU and memory information"""
-        try:
-            if torch.cuda.is_available():
-                num = torch.cuda.device_count()
-                for i in range(num):
-                    name = torch.cuda.get_device_name(i)
-                    total_mem = torch.cuda.get_device_properties(i).total_memory / (1024**3)
-                    logger.info(f"GPU[{i}]: {name} — total {total_mem:.2f} GB")
-                torch.cuda.empty_cache()
-                alloc = torch.cuda.memory_allocated() / (1024**3)
-                reserved = torch.cuda.memory_reserved() / (1024**3)
-                logger.info(f"CUDA memory — allocated {alloc:.2f} GB, reserved {reserved:.2f} GB")
-        except Exception as e:
-            logger.warning(f"Could not log device info: {e}")
 
     def _load_centroids_and_add_tokens(self):
         """Load cluster centroids and add corresponding tokens to tokenizer"""
@@ -740,11 +694,11 @@ class HiveLLMModel(nn.Module):
             n_move = self.move_centroids.size(0)
             self.move_cluster_tokens = [f"<{self.config.move_cluster_token_prefix}_{i}>" for i in range(n_move)]
 
-        # Add tokens to tokenizer
+        # Add tokens to tokenizer (use base_tokenizer for Gemma3 compatibility)
         new_tokens = self.board_cluster_tokens + self.move_cluster_tokens
         if new_tokens:
-            num_added = self.tokenizer.add_tokens(new_tokens, special_tokens=False)
-            self.base_model.resize_token_embeddings(len(self.tokenizer))
+            num_added = self.base_tokenizer.add_tokens(new_tokens, special_tokens=False)
+            self.base_model.resize_token_embeddings(len(self.base_tokenizer))
             self._random_initialize_cluster_embeddings()
             logger.info(f"Added {num_added} new tokens to vocabulary")
 
@@ -758,9 +712,9 @@ class HiveLLMModel(nn.Module):
 
         rng = np.random.default_rng(self.config.seed)
 
-        # Build pool of candidate tokens
-        vocab_size = len(self.tokenizer)
-        special_ids = set(getattr(self.tokenizer, 'all_special_ids', []) or [])
+        # Build pool of candidate tokens (use base_tokenizer)
+        vocab_size = len(self.base_tokenizer)
+        special_ids = set(getattr(self.base_tokenizer, 'all_special_ids', []) or [])
         candidate_ids = [i for i in range(vocab_size) if i not in special_ids]
         if not candidate_ids:
             candidate_ids = list(range(vocab_size))
@@ -769,7 +723,7 @@ class HiveLLMModel(nn.Module):
         preferred_tokens = list("0123456789abcdefghijklmnopqrstuvwxyz.,!?;:-()")
         preferred_ids = []
         for t in preferred_tokens:
-            tid = self.tokenizer.convert_tokens_to_ids(t)
+            tid = self.base_tokenizer.convert_tokens_to_ids(t)
             if isinstance(tid, int) and tid >= 0:
                 preferred_ids.append(tid)
         pool = preferred_ids if len(preferred_ids) >= 10 else candidate_ids
@@ -785,7 +739,7 @@ class HiveLLMModel(nn.Module):
         with torch.no_grad():
             # Initialize board tokens
             for i, tok in enumerate(self.board_cluster_tokens):
-                tok_id = self.tokenizer.convert_tokens_to_ids(tok)
+                tok_id = self.base_tokenizer.convert_tokens_to_ids(tok)
                 src_id = int(rng.choice(pool))
                 emb_layer.weight[tok_id] = emb_layer.weight[src_id].to(device=device, dtype=dtype)
                 mapping['board'].append({
@@ -796,13 +750,12 @@ class HiveLLMModel(nn.Module):
                 })
                 mapping['board_token_to_index'][tok] = i
                 mapping['init_from'][tok] = {
-                    'token_str': self.tokenizer.convert_ids_to_tokens(src_id),
+                    'token_str': self.base_tokenizer.convert_ids_to_tokens(src_id),
                     'token_id': int(src_id),
                 }
-
             # Initialize move tokens
             for i, tok in enumerate(self.move_cluster_tokens):
-                tok_id = self.tokenizer.convert_tokens_to_ids(tok)
+                tok_id = self.base_tokenizer.convert_tokens_to_ids(tok)
                 src_id = int(rng.choice(pool))
                 emb_layer.weight[tok_id] = emb_layer.weight[src_id].to(device=device, dtype=dtype)
                 mapping['move'].append({
@@ -813,7 +766,7 @@ class HiveLLMModel(nn.Module):
                 })
                 mapping['move_token_to_index'][tok] = i
                 mapping['init_from'][tok] = {
-                    'token_str': self.tokenizer.convert_ids_to_tokens(src_id),
+                    'token_str': self.base_tokenizer.convert_ids_to_tokens(src_id),
                     'token_id': int(src_id),
                 }
 
@@ -860,8 +813,7 @@ class HiveLLMModel(nn.Module):
     def generate_json(self, input_text: str, max_retries: int = 3) -> Dict:
         """Generate JSON output with validation"""
         device = next(self.parameters()).device
-        
-        # Encode input
+        # Encode input (chat/processor or tokenizer both work)
         inputs = self.tokenizer(input_text, return_tensors='pt').to(device)
         
         for retry in range(max_retries):
@@ -907,18 +859,23 @@ class HiveLLMModel(nn.Module):
 
     def save_model(self, path: str, also_copy_mapping_to_data: Optional[str] = None):
         os.makedirs(path, exist_ok=True)
-        
         # Save adapter
         self.base_model.save_pretrained(os.path.join(path, "adapter"))
-        
-        # Save tokenizer
-        self.tokenizer.save_pretrained(os.path.join(path, "tokenizer"))
-        
+        # Save tokenizer (always save the base text tokenizer for downstream inference)
+        try:
+            self.base_tokenizer.save_pretrained(os.path.join(path, "tokenizer"))
+        except Exception as e:
+            logger.warning(f"Failed to save base tokenizer: {e}")
+        # Optionally also save processor (Gemma3) for completeness
+        if getattr(self, "processor", None) is not None:
+            try:
+                self.processor.save_pretrained(os.path.join(path, "processor"))
+            except Exception as e:
+                logger.warning(f"Failed to save processor: {e}")
         # Save config
         config_dict = {k: v for k, v in self.config.__dict__.items()}
         with open(os.path.join(path, "config.json"), 'w') as f:
             json.dump(config_dict, f, indent=2, default=str)
-        
         # Save token-centroid mapping
         mapping = self.build_token_centroid_mapping()
         mapping_path = os.path.join(path, "token_centroid_mapping.json")
@@ -950,7 +907,22 @@ class HiveLLMModel(nn.Module):
 
         logger.info(f"Model saved to {path}")
 
-
+    def _log_device_info(self):
+        """Log GPU and memory information"""
+        try:
+            if torch.cuda.is_available():
+                num = torch.cuda.device_count()
+                for i in range(num):
+                    name = torch.cuda.get_device_name(i)
+                    total_mem = torch.cuda.get_device_properties(i).total_memory / (1024**3)
+                    logger.info(f"GPU[{i}]: {name} — total {total_mem:.2f} GB")
+                torch.cuda.empty_cache()
+                alloc = torch.cuda.memory_allocated() / (1024**3)
+                reserved = torch.cuda.memory_reserved() / (1024**3)
+                logger.info(f"CUDA memory — allocated {alloc:.2f} GB, reserved {reserved:.2f} GB")
+        except Exception as e:
+            logger.warning(f"Could not log device info: {e}")
+            
 def _decode_and_log_examples(model, batch: Dict[str, torch.Tensor], step: int, config: HiveLLMConfig):
     """Enhanced logging with token verification and JSON output checking"""
     model_was_training = model.training
@@ -1004,10 +976,10 @@ def _decode_and_log_examples(model, batch: Dict[str, torch.Tensor], step: int, c
                     preds_shifted[1:] = preds[:-1]
                 pred_target_span = preds_shifted[start:]
 
-            # Decode
-            decoded_input = model.tokenizer.decode(input_ids.tolist(), skip_special_tokens=False)
-            decoded_target = model.tokenizer.decode(target_token_ids.tolist(), skip_special_tokens=False)
-            decoded_pred = model.tokenizer.decode(pred_target_span.tolist(), skip_special_tokens=False)
+            # Decode with base tokenizer (always text tokenizer)
+            decoded_input = model.base_tokenizer.decode(input_ids.tolist(), skip_special_tokens=False)
+            decoded_target = model.base_tokenizer.decode(target_token_ids.tolist(), skip_special_tokens=False)
+            decoded_pred = model.base_tokenizer.decode(pred_target_span.tolist(), skip_special_tokens=False)
 
             # Check for cluster tokens in decoded strings
             board_tokens_found = [t for t in model.board_cluster_tokens if t in decoded_input]
@@ -1114,7 +1086,7 @@ def train_model(config: HiveLLMConfig):
         train_samples,
         model.board_cluster_tokens,
         model.move_cluster_tokens,
-        model.tokenizer,
+        model.tokenizer,  # may be Processor; dataset handles base tokenizer internally
         config=config,
         system_prompt=system_prompt,
         pretokenize=config.pretokenize,
@@ -1128,7 +1100,7 @@ def train_model(config: HiveLLMConfig):
             val_samples,
             model.board_cluster_tokens,
             model.move_cluster_tokens,
-            model.tokenizer,
+            model.tokenizer,  # may be Processor
             config=config,
             system_prompt=system_prompt,
             pretokenize=config.pretokenize,
