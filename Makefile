@@ -16,11 +16,12 @@ CLUSTER_DIR = $(BIG_CLUSTER_DIR)
 
 SRC_DIR = src
 
-#OUTPUT_DIR = models\\LLM_gpt_oss
 OUTPUT_DIR = models\\LLM_gemma3_12b
+#OUTPUT_DIR = models\\LLM_gemma3
 LLM_DIR = ${OUTPUT_DIR}\\checkpoint_epoch2
 # Default target
 
+# cmd /k '"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat" -arch=x64 && title VS Dev Cmd && where cl'
 venv:
 	.\\.venv\\Scripts\\activate
 data:
@@ -35,13 +36,10 @@ train:
 tokenizer:
 	python $(SRC_DIR)\\A_LLM_tokenizer_test.py --tokenizer $(LLM_DIR)\\tokenizer
 
-inference:
-	python $(SRC_DIR)\\A_LLM_inference.py --model_dir $(LLM_DIR) --system_prompt $(SRC_DIR)\\prompts\\prompt.txt --max_new_tokens 5000 --verbose
-
 duel:
-	python $(SRC_DIR)\\A_LLM_inference_duel.py --model-dir $(LLM_DIR) --gnn-model $(GNN_PATH) --num-games 5 --llm-color black --output-dir duel_results\\llm_vs_random --max-moves 150
+	python $(SRC_DIR)\\A_LLM_duel.py --model-dir $(LLM_DIR) --gnn-model $(GNN_PATH) --num-games 5 --llm-color black --output-dir logs\\duel_results\\llm_vs_random --max-moves 150
 
 nothing:
 	neofetch
 
-.PHONY: nothing data train inference venv duel
+.PHONY: nothing data k-means train tokenizer venv duel

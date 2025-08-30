@@ -61,7 +61,7 @@ class HiveLLMInference:
         with open(config_path, 'r') as f:
             config = json.load(f)
         
-        base_model_name = config.get("base_model_name", "unsloth/gemma-2-9b-it-bnb-4bit")
+        base_model_name = config.get("base_model_name", "unsloth/gemma-3-12b-it-bnb-4bit")
         logger.info(f"Base model from config: {base_model_name}")
         
         # Check if this is an Unsloth model
@@ -387,9 +387,15 @@ class HiveLLMInference:
         valid_moves = list(board.get_valid_moves())
         context_parts.append(" Choose ONE move among the following LEGAL moves: ")
         
+        # Collect unique move tokens to avoid duplicates
+        unique_move_tokens = set()
         for move in valid_moves:
             move_token = self._move_to_cluster_token(board, move)
-            context_parts.append(f"- {move_token}")
+            unique_move_tokens.add(move_token)
+        
+        # List each unique token only once
+        for token in sorted(unique_move_tokens):  # Sort for consistent ordering (optional but helpful for debugging)
+            context_parts.append(f"- {token}")
             
         return "  ".join(context_parts)
         
@@ -586,7 +592,7 @@ def play_game(llm_player: HiveLLMInference, random_player: Random,
         Dictionary containing game results and statistics
     """
     
-    board = Board()
+    board = Board("Base+MLP")
     move_history = []  # List of (board_token, move_token) tuples
     game_log = []
     winning_moves_detected = 0
