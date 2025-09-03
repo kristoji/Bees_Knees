@@ -20,6 +20,7 @@ pip install -r requirements.txt
 ```
 make data #generates the dataset
 make k-means #generates clusters
+.\compiler.ps1 #start the torch C++ compiler for Unsloth
 make train #fine-tunes the LLM
 make duel #plays Hive
 ```
