@@ -1,0 +1,21 @@
+# Dependencies for the DISI GPU cluster (giano.cs.unibo.it).
+#
+# The repository's own requirements.txt is NOT usable here: it pins torch 2.8.0+cu128
+# together with torch_scatter/torch_sparse/torch_cluster/torch_spline_conv built for
+# pt24cu124. Those are inconsistent with each other and with the cluster, whose nodes
+# run driver 535 with CUDA 11.8.
+#
+# torch is installed from the cu118 index by setup_giano.sh, not from here.
+# 2.5.1 is pinned because it has cu118 wheels and covers both GPUs on the cluster:
+# Turing sm_75 (RTX 2080 Ti) and Ada sm_89 (L40).
+torch==2.5.1
+
+# The PyG compiled extensions are deliberately absent. Everything graph_network.py uses
+# (GINConv, GATConv, GCNConv and the global_*_pool functions) runs on native torch
+# scatter ops in PyG >= 2.3, so torch_scatter and friends would only add a long and
+# fragile source build.
+torch-geometric==2.6.1
+pytorch-lightning==2.4.0
+
+numpy
+tqdm

@@ -7,8 +7,7 @@ from torch_geometric.data import Data, Batch
 from ai.graph_network import GraphClassifier
 from ai.oracle import Oracle
 from ai.loader import GraphDataset
-from engine.enums import BugType, Direction
-from engine.game import NEIGHBOR_INDICES
+from ai.board_graph import board_to_graph
 from collections import defaultdict
 from ai.log_utils import log_header, log_subheader
 import os
@@ -20,20 +19,13 @@ LONG = 100
 SUPERLONG = 150
 TURN_LIMIT = 100
 
-# Node feature layout, built once instead of on every _data_from_board call.
-# Columns: 0 = colour, 1..9 = a 9-wide one-hot over the 8 bug types whose slot 0 is
-# reserved for "no bug" and therefore never set here, 10 = pinned, 11 = pinning,
-# 12 = articulation. The always-zero column 1 is not an off-by-one: the training set
-# uses exactly the same 9-wide encoding (see TRAINING_and_DATASET.md), so the layouts
-# match. Do not "fix" it without regenerating the dataset.
-_NUM_FEATURES = 1 + len(list(BugType)) + 1 + 3
-_TYPE_COLUMN = {bug_type: 1 + i + 1 for i, bug_type in enumerate(BugType)}
 
 class OracleGNN(Oracle):
     """
     Oracle that uses a neural network to predict the value and policy of a board state.
     """
-    def __init__(self, device: Optional[str] = None, hidden_dim: int = 64, **kwargs_network) -> None:
+    def __init__(self, device: Optional[str] = None, hidden_dim: int = 64,
+                 compile_model: bool = False, **kwargs_network) -> None:
         # self.device = torch.device(torch.environ.get("TORCH_DEVICE", "cpu")) if hasattr(torch, 'environ') else torch.device("cpu")
         # device to gpu
         self.device = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -55,11 +47,13 @@ class OracleGNN(Oracle):
             torch.set_num_threads(8)
             torch.set_num_interop_threads(1)        # evita oversubscription
             
-        try:
-            self.network = torch.compile(self.network, mode="reduce-overhead")  # or "reduce-overhead"
-        except Exception:
-            print("sei ghey, torch.compile not supported on this device")
-            pass  # fall back if PyG op not supported
+        # Off by default. torch.compile is lazy, so the try/except that used to wrap it
+        # caught nothing; and mode="reduce-overhead" uses CUDA graphs, which need stable
+        # shapes that batched graph data does not have, so it recompiles constantly.
+        # Wrapping the module also breaks load(): the compiled wrapper prefixes the
+        # state dict keys. Measure before turning this on.
+        if compile_model:
+            self.network = torch.compile(self.network)
         
     def training(self, train_data_path:str, epochs:int) -> None:
         """
@@ -282,87 +276,20 @@ class OracleGNN(Oracle):
             pi = {m: float(p) for m, p in zip(valid_moves, arr.tolist())}
         return v, pi
 
-    # Alternative: If you still need the separate functions for compatibility
     def _data_from_board(self, board: Board) -> Optional[Data]:
-        """Build the PyG graph for a board state.
+        """Wrap the shared numpy graph builder into a PyG Data.
 
-        This runs once per legal move per expanded leaf, so it is the hottest Python
-        in a GNN-guided search. Changes from the previous version, all
-        output-preserving: the type table is a module constant instead of being
-        rebuilt per call; pos_bug_to_index (a dict keyed on (Position, Bug), so every
-        insert hashed a Bug) was built and never read; the per-height grouping is a
-        list of dicts keyed on dense cell indices rather than a defaultdict keyed on
-        (Position, height) tuples; edges go straight into a numpy array instead of a
-        list of Python tuples; and the tensors are no longer pinned individually.
+        The construction itself lives in ai.board_graph so that the dataset rebuild
+        can produce byte-identical inputs without importing torch.
         """
-        pos_to_bug = board._pos_to_bug
-        if not pos_to_bug:
+        built = board_to_graph(board)
+        if built is None:
             return None
-
-        current_player = board.current_player_color
-        art_pos_set = board._art_pos
-
-        # Nodes, grouped by stack height as we go.
-        x_rows = []
-        height_maps: List[dict] = []
-        vertical: List[tuple] = []
-        node_idx = 0
-        for pos, bugs in pos_to_bug.items():
-            if not bugs:
-                continue
-            is_art = pos.index in art_pos_set
-            num_bugs = len(bugs)
-            pos_index = pos.index
-            first_idx = node_idx
-            for h, bug in enumerate(bugs):
-                while len(height_maps) <= h:
-                    height_maps.append({})
-                height_maps[h][pos_index] = node_idx
-                x_rows.append((
-                    1.0 if bug.color == current_player else 0.0,
-                    _TYPE_COLUMN[bug.type],
-                    1.0 if h < num_bugs - 1 else 0.0,   # pinned
-                    1.0 if h > 0 else 0.0,              # pinning
-                    1.0 if h == 0 and is_art else 0.0,  # articulation
-                ))
-                node_idx += 1
-            for h in range(num_bugs - 1):
-                i = first_idx + h
-                vertical.append((i, i + 1))
-                vertical.append((i + 1, i))
-
-        total_nodes = node_idx
-        if total_nodes == 0:
-            return None
-
-        x = np.zeros((total_nodes, _NUM_FEATURES), dtype=np.float32)
-        for i, (color, type_col, pinned, pinning, art) in enumerate(x_rows):
-            x[i, 0] = color
-            x[i, type_col] = 1.0
-            x[i, -3] = pinned
-            x[i, -2] = pinning
-            x[i, -1] = art
-
-        # Flat edges: same height, adjacent cells. Both directions appear because both
-        # endpoints are visited.
-        edges: List[tuple] = vertical
-        for pos_map in height_maps:
-            for pos_index, i in pos_map.items():
-                for neighbor_index in NEIGHBOR_INDICES[pos_index]:
-                    j = pos_map.get(neighbor_index)
-                    if j is not None:
-                        edges.append((i, j))
-
-        if edges:
-            edge_index = torch.from_numpy(
-                np.asarray(edges, dtype=np.int64).T.copy()
-            )
-        else:
-            edge_index = torch.empty((2, 0), dtype=torch.long)
-
-        batch = torch.zeros(total_nodes, dtype=torch.long)
-        # pin_memory() used to be called on each of these three tiny tensors. It is a
+        x, edge_index = built
+        # pin_memory() used to be called on each of these small tensors. It is a
         # page-locking allocation with a device synchronisation: on ~30-node graphs it
         # costs far more than the asynchronous copy it enables. If pinning is wanted it
         # belongs on the aggregated Batch in predict_values_batch_from_data.
-        return Data(x=torch.from_numpy(x), edge_index=edge_index, batch=batch)
+        return Data(x=torch.from_numpy(x),
+                    edge_index=torch.from_numpy(edge_index),
+                    batch=torch.zeros(x.shape[0], dtype=torch.long))
