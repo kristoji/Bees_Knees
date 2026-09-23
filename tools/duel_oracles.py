@@ -61,16 +61,34 @@ def load_gnn(weights, summary_path, device):
     return oracle, cfg
 
 
-def play_game(oracle_white, oracle_black, rollouts, max_plies, exploration, seed):
-    random.seed(seed)
+def random_opening(board, plies, seed):
+    """Play `plies` random legal moves, so the duel does not replay one fixed game.
+
+    MCTS_BATCH is fully deterministic: no sampling in the selection, no Dirichlet noise
+    at the root, and the move is the argmax of the visit counts. Two runs with the same
+    oracles therefore produce the identical game, and seeding random does nothing. The
+    variety has to come from the starting position.
+    """
+    rng = random.Random(seed)
+    for _ in range(plies):
+        moves = sorted(board.get_valid_moves(), key=board.stringify_move)
+        if not moves:
+            break
+        board.safe_play(moves[rng.randrange(len(moves))])
+    return board
+
+
+def play_game(oracle_white, oracle_black, rollouts, max_plies, exploration,
+              opening_plies, opening_seed):
     board = Board("Base+MLP")
+    random_opening(board, opening_plies, opening_seed)
     searchers = {
         PlayerColor.WHITE: MCTS_BATCH(oracle=oracle_white, exploration_weight=exploration,
                                       num_rollouts=rollouts, batch_size=32),
         PlayerColor.BLACK: MCTS_BATCH(oracle=oracle_black, exploration_weight=exploration,
                                       num_rollouts=rollouts, batch_size=32),
     }
-    for _ in range(max_plies):
+    while board.turn < max_plies:
         move = searchers[board.current_player_color].calculate_best_move(
             board, restriction="depth", value=rollouts)
         board.play(move)
@@ -91,6 +109,10 @@ def main():
     parser.add_argument("--rollouts", type=int, default=100)
     parser.add_argument("--max-plies", type=int, default=150)
     parser.add_argument("--exploration", type=int, default=5)
+    parser.add_argument("--opening-plies", type=int, default=4,
+                        help="random legal plies before the engines take over; the "
+                             "search is deterministic, so this is what makes the games "
+                             "differ from each other")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=20260923)
     parser.add_argument("--out", default=None, help="write the result as JSON here")
@@ -100,18 +122,22 @@ def main():
     heuristic = HeuristicOracle()
     print(f"GNN: {cfg['conv_type']} x{cfg['num_layers']}, hidden {cfg['hidden_dim']}, "
           f"from {args.weights}")
-    print(f"{args.games} games, {args.rollouts} rollouts per move, colours alternate\n")
+    print(f"{args.games} games, {args.rollouts} rollouts per move, "
+          f"{args.opening_plies} random opening plies, colours alternate")
+    print("games are paired: each opening is played from both sides\n")
 
     wins = losses = draws = capped = 0
     start = time.perf_counter()
     for game in range(args.start_game, args.start_game + args.games):
-        # Colour and seed follow the absolute index, so shard k of an array plays a
-        # distinct, reproducible slice of the same match.
+        # Games are paired: 2i and 2i+1 share one random opening with the colours
+        # swapped, so a lucky or unlucky opening is played from both sides and cancels
+        # out. The absolute index keeps every shard of an array reproducible.
         gnn_is_white = game % 2 == 0
+        opening_seed = args.seed + game // 2
         white = gnn if gnn_is_white else heuristic
         black = heuristic if gnn_is_white else gnn
         state, plies = play_game(white, black, args.rollouts, args.max_plies,
-                                 args.exploration, args.seed + game)
+                                 args.exploration, args.opening_plies, opening_seed)
         if state is None:
             capped += 1
             result = "cap"
