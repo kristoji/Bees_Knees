@@ -299,10 +299,10 @@ class Board():
         queen_pos = self._bug_to_pos.get(_QUEEN[color])
         if queen_pos is None:
             return 0
-        pos_to_bug = self._pos_to_bug
+        occupied = self._occupied
         n = 0
-        for neighbor in queen_pos.flat_neighbors:
-            if pos_to_bug.get(neighbor):
+        for idx in queen_pos.neighbor_indices:
+            if idx in occupied:
                 n += 1
         return n
 
@@ -430,17 +430,35 @@ class Board():
         return (origin in ((right := position.get_neighbor(direction.right_of)), (left := position.get_neighbor(direction.left_of)))) == (bool(self._bugs_from_pos(right)) == bool(self._bugs_from_pos(left)))
 
     def _get_sliding_moves(self, bug: Bug, origin: Position, depth: int = 0) -> Set[Move]:
-        
+        occupied = self._occupied
         destinations: set[Position] = set()
+        # Kept as a set, like the original: two different paths reaching the same cell
+        # at the same depth are distinct states (the path blocks backtracking), so only
+        # exactly identical triples may be collapsed.
         stack: set[tuple[Position, int, frozenset[Position]]] = {(origin, 0, frozenset({origin}))}
         unlimited_depth = depth == 0
         while stack:
             current, current_depth, path = stack.pop()
             if unlimited_depth or current_depth == depth:
                 destinations.add(current)
-            if unlimited_depth or current_depth < depth:
-                stack.update((neighbor, current_depth + 1, path | {neighbor}) for direction in Direction if (neighbor := current.get_neighbor(direction)) not in path and not self._bugs_from_pos(neighbor) and self._check_no_door(origin, current, direction))
-        return {Move(bug, origin, destination) for destination in destinations if destination != origin}
+            if not (unlimited_depth or current_depth < depth):
+                continue
+            neighbors = current.flat_neighbors
+            next_depth = current_depth + 1
+            for i in range(6):
+                neighbor = neighbors[i]
+                if neighbor in path or neighbor.index in occupied:
+                    continue
+                # "no door": the gate formed by the two cells flanking the step must
+                # not be closed. right_of(i) is i-1 and left_of(i) is i+1, mod 6.
+                right = neighbors[i - 1 if i else 5]
+                left = neighbors[i + 1 if i < 5 else 0]
+                if (origin is right or origin is left) != (
+                    (right.index in occupied) == (left.index in occupied)
+                ):
+                    continue
+                stack.add((neighbor, next_depth, path | {neighbor}))
+        return {Move(bug, origin, destination) for destination in destinations if destination is not origin}
 
 
     def _get_beetle_moves(self, bug: Bug, origin: Position, virtual: bool = False) -> Set[Move]:
