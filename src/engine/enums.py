@@ -176,9 +176,10 @@ class Direction(StrEnum):
     ABOVE = "|"
 
     @classmethod
-    def flat(cls) -> list["Direction"]:
-        # return [d for d in cls if d not in (cls.ABOVE, cls.BELOW)]
-        return [Direction.RIGHT, Direction.UP_RIGHT, Direction.UP_LEFT, Direction.LEFT, Direction.DOWN_LEFT, Direction.DOWN_RIGHT]
+    def flat(cls) -> tuple["Direction", ...]:
+        # A module constant: this used to build a fresh six-element list on every call,
+        # and it is called from inside the move generators.
+        return FLAT_DIRECTIONS
 
     @classmethod
     def flat_left(cls) -> list["Direction"]:
@@ -192,64 +193,16 @@ class Direction(StrEnum):
         return self.replace("|", "")
 
     @property
-    def opposite(self) -> "Direction":    
-        match self:
-            case Direction.RIGHT:
-                return Direction.LEFT
-            case Direction.UP_RIGHT:
-                return Direction.DOWN_LEFT
-            case Direction.UP_LEFT:
-                return Direction.DOWN_RIGHT
-            case Direction.LEFT:
-                return Direction.RIGHT
-            case Direction.DOWN_LEFT:
-                return Direction.UP_RIGHT
-            case Direction.DOWN_RIGHT:
-                return Direction.UP_LEFT
-            case Direction.BELOW:
-                return Direction.ABOVE
-            case Direction.ABOVE:
-                return Direction.BELOW
+    def opposite(self) -> "Direction":
+        return _OPPOSITE[self]
 
     @property
     def left_of(self) -> "Direction":
-        match self:
-            case Direction.RIGHT:
-                return Direction.UP_RIGHT
-            case Direction.UP_RIGHT:
-                return Direction.UP_LEFT
-            case Direction.UP_LEFT:
-                return Direction.LEFT
-            case Direction.LEFT:
-                return Direction.DOWN_LEFT
-            case Direction.DOWN_LEFT:
-                return Direction.DOWN_RIGHT
-            case Direction.DOWN_RIGHT:
-                return Direction.RIGHT
-            case Direction.BELOW:
-                return Direction.BELOW
-            case Direction.ABOVE:
-                return Direction.ABOVE
+        return _LEFT_OF[self]
 
     @property
     def right_of(self) -> "Direction":
-        match self:
-            case Direction.RIGHT:
-                return Direction.DOWN_RIGHT
-            case Direction.UP_RIGHT:
-                return Direction.RIGHT
-            case Direction.UP_LEFT:
-                return Direction.UP_RIGHT
-            case Direction.LEFT:
-                return Direction.UP_LEFT
-            case Direction.DOWN_LEFT:
-                return Direction.LEFT
-            case Direction.DOWN_RIGHT:
-                return Direction.DOWN_LEFT
-            case Direction.BELOW:
-                return Direction.BELOW
-            case Direction.ABOVE:
-                return Direction.ABOVE
+        return _RIGHT_OF[self]
 
     @property
     def delta_index(self) -> int:
@@ -274,11 +227,39 @@ class Direction(StrEnum):
 
     @property
     def is_right(self) -> bool:
-        return self in (Direction.RIGHT, Direction.UP_RIGHT, Direction.DOWN_RIGHT)
+        return self in _RIGHT_SIDE
 
     @property
     def is_left(self) -> bool:
-        return self in (Direction.LEFT, Direction.UP_LEFT, Direction.DOWN_LEFT)
+        return self in _LEFT_SIDE
+
+
+FLAT_DIRECTIONS: tuple[Direction, ...] = (
+    Direction.RIGHT, Direction.UP_RIGHT, Direction.UP_LEFT,
+    Direction.LEFT, Direction.DOWN_LEFT, Direction.DOWN_RIGHT,
+)
+# These were match statements over eight cases evaluated on every access, from inside
+# the move generators and stringify_move.
+_OPPOSITE = {
+    Direction.RIGHT: Direction.LEFT, Direction.UP_RIGHT: Direction.DOWN_LEFT,
+    Direction.UP_LEFT: Direction.DOWN_RIGHT, Direction.LEFT: Direction.RIGHT,
+    Direction.DOWN_LEFT: Direction.UP_RIGHT, Direction.DOWN_RIGHT: Direction.UP_LEFT,
+    Direction.BELOW: Direction.ABOVE, Direction.ABOVE: Direction.BELOW,
+}
+_LEFT_OF = {
+    Direction.RIGHT: Direction.UP_RIGHT, Direction.UP_RIGHT: Direction.UP_LEFT,
+    Direction.UP_LEFT: Direction.LEFT, Direction.LEFT: Direction.DOWN_LEFT,
+    Direction.DOWN_LEFT: Direction.DOWN_RIGHT, Direction.DOWN_RIGHT: Direction.RIGHT,
+    Direction.BELOW: Direction.BELOW, Direction.ABOVE: Direction.ABOVE,
+}
+_RIGHT_OF = {
+    Direction.RIGHT: Direction.DOWN_RIGHT, Direction.UP_RIGHT: Direction.RIGHT,
+    Direction.UP_LEFT: Direction.UP_RIGHT, Direction.LEFT: Direction.UP_LEFT,
+    Direction.DOWN_LEFT: Direction.LEFT, Direction.DOWN_RIGHT: Direction.DOWN_LEFT,
+    Direction.BELOW: Direction.BELOW, Direction.ABOVE: Direction.ABOVE,
+}
+_RIGHT_SIDE = frozenset((Direction.RIGHT, Direction.UP_RIGHT, Direction.DOWN_RIGHT))
+_LEFT_SIDE = frozenset((Direction.LEFT, Direction.UP_LEFT, Direction.DOWN_LEFT))
 
 class Error(Exception):
     def __init__(self, message: str ="An error occurred"):

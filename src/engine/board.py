@@ -462,16 +462,21 @@ class Board():
 
 
     def _get_beetle_moves(self, bug: Bug, origin: Position, virtual: bool = False) -> Set[Move]:
+        pos_to_bug = self._pos_to_bug
+        neighbors = origin.flat_neighbors
+        # Stack heights of the six neighbours, computed once: the gate check reads each
+        # of them twice (as the left of one direction and the right of the next).
+        heights = [len(bugs) if (bugs := pos_to_bug.get(n)) else 0 for n in neighbors]
+        origin_bugs = pos_to_bug.get(origin)
+        height = (len(origin_bugs) if origin_bugs else 0) - 1 + virtual
         moves: Set[Move] = set()
-        height = len(self._bugs_from_pos(origin)) - 1 + int(virtual)
-        for d in Direction.flat():
-            destination = origin.get_neighbor(d)
-            dest_height = len(self._bugs_from_pos(destination))
-            left_height = len(self._bugs_from_pos(origin.get_neighbor(d.left_of)))
-            right_height = len(self._bugs_from_pos(origin.get_neighbor(d.right_of)))
+        for i in range(6):
+            dest_height = heights[i]
+            left_height = heights[i + 1 if i < 5 else 0]
+            right_height = heights[i - 1 if i else 5]
             if not ((height == 0 and dest_height == 0 and left_height == 0 and right_height == 0)
                     or (dest_height < left_height and dest_height < right_height and height < left_height and height < right_height)):
-                moves.add(Move(bug, origin, destination))
+                moves.add(Move(bug, origin, neighbors[i]))
         return moves
 
     def _get_grasshopper_moves(self, bug: Bug, origin: Position) -> Set[Move]:
@@ -532,16 +537,14 @@ class Board():
         }
 
     def _get_pillbug_special_moves(self, origin: Position) -> Set[Move]:
-        empty_positions = [
-            origin.get_neighbor(d)
-            for d in Direction.flat()
-            if not self._bugs_from_pos(origin.get_neighbor(d))
-        ]
+        pos_to_bug = self._pos_to_bug
+        occupied = self._occupied
+        neighbors = origin.flat_neighbors
+        empty_positions = [n for n in neighbors if n.index not in occupied]
         moves: Set[Move] = set()
         if empty_positions:
-            for d in Direction.flat():
-                source = origin.get_neighbor(d)
-                bugs = self._bugs_from_pos(source)
+            for source in neighbors:
+                bugs = pos_to_bug.get(source) or ()  # .get gives None, the old helper gave []
                 if (len(bugs) == 1 
                     and self._was_not_last_moved(move_bug := bugs[-1]) 
                     and self._can_move_without_breaking_hive(source) 
