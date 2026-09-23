@@ -206,12 +206,11 @@ DataLoader CPU-only.
 - **Parallelismo.** Deciso: sequenziale. Il threading su Python puro non può dare
   speedup. La strada è **multi-processo** con la rete dietro un server di inferenza;
   il prerequisito era una `Board` leggera e serializzabile, che ora esiste.
-- **Colonna di feature inutilizzata.** `_data_from_board` dichiara 13 feature ma scrive
-  solo le colonne 0 e 2..12: l'indice del one-hot parte da 1 e viene sommato a un altro
-  1, quindi **la colonna 1 è sempre zero**. È un off-by-one, ma correggerlo cambia la
-  rappresentazione in input della rete, che è una scelta di modello, non
-  un'ottimizzazione. Lasciato com'è con un commento. **Da decidere prima del training**,
-  perché dopo costa un retraining.
+- ~~**Colonna di feature inutilizzata**~~ — **non era un bug.** Avevo segnalato la
+  colonna 1 sempre a zero come off-by-one. Ispezionando il dataset reale (vedi
+  `TRAINING_and_DATASET.md`) risulta che il one-hot è a 9 slot con lo slot 0 riservato a
+  "nessun insetto", e il dataset usa esattamente la stessa codifica: i due layout
+  combaciano. Va lasciata così.
 
 ### Non ancora affrontato
 

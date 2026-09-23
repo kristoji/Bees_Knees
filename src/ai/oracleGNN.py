@@ -21,10 +21,11 @@ SUPERLONG = 150
 TURN_LIMIT = 100
 
 # Node feature layout, built once instead of on every _data_from_board call.
-# NOTE: column 1 is never written. The one-hot index starts at 1 and is then offset
-# by another 1, so the types land in columns 2..9 and one of the 13 features is
-# always zero. Left as is on purpose: changing it changes the network's input
-# representation, which is a modelling decision, not an optimization.
+# Columns: 0 = colour, 1..9 = a 9-wide one-hot over the 8 bug types whose slot 0 is
+# reserved for "no bug" and therefore never set here, 10 = pinned, 11 = pinning,
+# 12 = articulation. The always-zero column 1 is not an off-by-one: the training set
+# uses exactly the same 9-wide encoding (see TRAINING_and_DATASET.md), so the layouts
+# match. Do not "fix" it without regenerating the dataset.
 _NUM_FEATURES = 1 + len(list(BugType)) + 1 + 3
 _TYPE_COLUMN = {bug_type: 1 + i + 1 for i, bug_type in enumerate(BugType)}
 
