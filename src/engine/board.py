@@ -157,6 +157,32 @@ class Board():
                 f"You can't {'play' if move else Move.PASS} when the game is over"
             )
 
+    def copy(self) -> "Board":
+        """An independent board sharing the read-only caches.
+
+        Cheap now that the Zobrist tables are global: it used to be unusable because
+        every board carried its own 237MB table. The snapshot caches are keyed on
+        values that are global too (the zobrist key and the hive shape hash), so the
+        copy shares them instead of starting cold; neither is ever mutated in place.
+        """
+        other = Board.__new__(Board)
+        other.type = self.type
+        other.state = self.state
+        other.turn = self.turn
+        other.move_strings = list(self.move_strings)
+        other.moves = list(self.moves)
+        other._zobrist_hash = ZobristHash()
+        other._zobrist_hash.value = self._zobrist_hash.value
+        other._pos_to_bug = {pos: list(bugs) for pos, bugs in self._pos_to_bug.items() if bugs}
+        other._bug_to_pos = dict(self._bug_to_pos)
+        other._draw_counter = defaultdict(int, self._draw_counter)
+        other._occupied = set(self._occupied)
+        other._shape_key = self._shape_key
+        other._art_pos = self._art_pos
+        other._snapshots = self._snapshots
+        other._snapshots_art_pos = self._snapshots_art_pos
+        return other
+
     def play(self, move_string: str, update_hash: bool = True) -> None:
         move = self._parse_move(move_string)
         self.safe_play(move, update_hash, move_string) 

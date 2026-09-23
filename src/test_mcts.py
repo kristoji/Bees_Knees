@@ -94,7 +94,7 @@ testcases = [
     },
     {
         "start": "Base+MLP;InProgress;Black[24];wS1;bG1 wS1-;wP \\wS1;bA1 bG1\\;wS2 \\wP;bS1 bA1-;wQ wS2-;bQ /bS1;wQ -wP;bA2 bG1/;wM -wS2;bS2 bA2-;wL /wQ;bA3 bQ\\;wB1 \\wM;bB1 bS1\\;wA1 -wL;bA3 -wS1;wB2 wS2-;bP bA2/;wA2 wB1/;bM bP-;wA1 bM\\;bM \\bP;wL wS2/;bB2 bB1\\;wA2 bM-;bM /bA3;wA2 wL/;bQ -bB2;wA1 \\bP;bG2 /bA1;wA3 wA2-;bM bS2\\;wA2 -wM;bL /bQ;wA2 \\wL;bG3 bM\\;wA2 -bA3;bB2 bG3\\;wG1 wA3/;bA3 wG1\\;wG2 -wA1;bA3 bL\\;wA1 -bA1;bA2 bP-;wG1 -wS1",
-        "correct_moves": ["play bA3 /wM"],
+        "correct_moves": ["bA3 /wM"],
         "desc": "winning move selected",
         "win" : True,
     },
