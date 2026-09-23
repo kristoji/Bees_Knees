@@ -42,10 +42,15 @@ class OracleGNN(Oracle):
             self._amp_dtype = None
 
         if self.device.type == 'cpu':
-            os.environ["OMP_NUM_THREADS"] = "8"     # scegli in base ai core fisici
-            os.environ["MKL_NUM_THREADS"] = "8"
-            torch.set_num_threads(8)
-            torch.set_num_interop_threads(1)        # evita oversubscription
+            # Respect the environment instead of forcing 8 threads: under SLURM the
+            # allocation is often 4 cores, and several duel games share one node, so
+            # hard-coding 8 oversubscribes badly. OMP_NUM_THREADS wins if it is set.
+            threads = int(os.environ.get("OMP_NUM_THREADS", 0)) or min(8, os.cpu_count() or 1)
+            torch.set_num_threads(threads)
+            try:
+                torch.set_num_interop_threads(1)    # evita oversubscription
+            except RuntimeError:
+                pass   # already initialised elsewhere in the process
             
         # Off by default. torch.compile is lazy, so the try/except that used to wrap it
         # caught nothing; and mode="reduce-overhead" uses CUDA graphs, which need stable
