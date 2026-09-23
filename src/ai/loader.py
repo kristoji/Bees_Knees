@@ -4,12 +4,11 @@ from tqdm import tqdm
 from glob import glob
 import json
 import torch
-from torch_geometric.data import Data, Batch
+from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 import pickle
 import hashlib
-import pandas as pd
-from torch.utils.data import random_split, DataLoader as TorchDataLoader
+from torch.utils.data import random_split
 
 class GraphDataset(Dataset):
     def __init__(self, folder_path: str):
@@ -140,58 +139,4 @@ class GraphDataset(Dataset):
         test_kwargs = {**kwargs, "shuffle": False}
         test_loader = DataLoader(test_dataset, **test_kwargs)
         
-        return train_loader, test_loader
-        
-class EmbeddingDataset(Dataset):
-    """Dataset for loading graph embeddings from CSV file"""
-    def __init__(self, csv_path, use_labels=False):
-        self.df = pd.read_csv(csv_path)
-        
-        # Extract features (embeddings) and labels
-        if 'label' in self.df.columns and use_labels:
-            self.labels = torch.tensor(self.df['label'].values, dtype=torch.float32)
-            self.embeddings = torch.tensor(self.df.drop(columns=['label']).values, dtype=torch.float32)
-            self.has_labels = True
-        else:
-            self.embeddings = torch.tensor(self.df.filter(regex='^emb_').values, dtype=torch.float32)
-            self.has_labels = False
-            self.labels = None
-        
-    def __len__(self):
-        return len(self.embeddings)
-    
-    def __getitem__(self, idx):
-        if self.has_labels:
-            return self.embeddings[idx], self.labels[idx]
-        else:
-            return self.embeddings[idx]
-
-    def _preload_to_gpu(self):
-        if torch.cuda.is_available():
-            self.embeddings = self.embeddings.to("cuda")
-            if self.has_labels:
-                self.labels = self.labels.to("cuda")
-
-    @property
-    def input_dim(self):
-        return self.embeddings.shape[1]
-
-    def get_dataloader(self, train_size=0.8, **kwargs):
-        """
-        Create a DataLoader for the dataset.
-
-        Args:
-            **kwargs: Keyword arguments passed to the DataLoader.
-
-        Returns:
-            DataLoader: A DataLoader instance for the dataset.
-        """
-
-        train_dataset, test_dataset = random_split(self, [train_size, 1 - train_size])
-
-        train_loader = TorchDataLoader(train_dataset, **kwargs)
-
-        test_kwargs = {**kwargs, "shuffle": False}
-        test_loader = TorchDataLoader(test_dataset, **test_kwargs)
-
         return train_loader, test_loader

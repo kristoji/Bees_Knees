@@ -1,48 +1,29 @@
-GNN_PATH = models\\gnn\\pretrain_GIN_3.pt
-TEST_GAME_DIR = data\\pro_matches\\board_few_games
-TEST_DATA_DIR = data\\LLM_dataset_few
-TEST_CLUSTER_DIR = models\\clustering_few
-BIG_GAME_DIR = data\\pro_matches\\board_data_tournaments
-BIG_DATA_DIR = data\\LLM_dataset
-BIG_CLUSTER_DIR = models\\clustering
+SRC_DIR   = src
 
+# Pretrained GNN checkpoint used by the MCTS oracle
+GNN_PATH  = models/gnn/pretrain_GIN_3.pt
 
-#GAME_DIR = $(TEST_GAME_DIR)
-#DATA_DIR = $(TEST_DATA_DIR)
-#CLUSTER_DIR = $(TEST_CLUSTER_DIR)
-GAME_DIR = $(BIG_GAME_DIR)
-DATA_DIR = $(BIG_DATA_DIR)
-CLUSTER_DIR = $(BIG_CLUSTER_DIR)
+# Graph dataset produced by src/gen_dataset (pro matches -> PyG graphs)
+GAME_DIR  = data/pro_matches/board_data_tournaments
 
-SRC_DIR = src
+# Pretrain the graph network (GIN/GAT/GCN, see kwargs_network in train_gnn.py)
+train-gnn:
+	python $(SRC_DIR)/train_gnn.py
 
-OUTPUT_DIR = models\\LLM_gemma3_12b
-#OUTPUT_DIR = models\\LLM_gemma3
-LLM_DIR = ${OUTPUT_DIR}\\checkpoint_epoch2
-# Default target
+# Same, then play a game against the freshly trained network
+play-gnn:
+	python $(SRC_DIR)/train_gnn.py --play
 
-# cmd /k '"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat" -arch=x64 && title VS Dev Cmd && where cl'
-venv:
-	.\\.venv\\Scripts\\activate
-data:
-	python $(SRC_DIR)\\A_LLM_data_generation.py --gnn_model $(GNN_PATH) --game_dir $(GAME_DIR) --output_dir $(DATA_DIR) --store_legal_move_embeddings
+# Benchmark the single-threaded MCTS against the batched MCTS_BATCH
+bench-mcts:
+	python $(SRC_DIR)/test_mcts.py
 
-k-means:
-	python $(SRC_DIR)\\A_LLM_data_add_centroids.py --caches $(DATA_DIR)\\train_sequential_cache.pkl $(DATA_DIR)\\validation_sequential_cache.pkl --types board move --augment-caches --fit-on-subset --subset-fraction 0.3 --subset-max 100000 --output-root $(CLUSTER_DIR)
+# AlphaZero-style self-play loop: generate matches -> train -> duel -> keep winner
+selfplay:
+	python $(SRC_DIR)/test/trainer.py
 
-cluster_analysis:
-	python $(SRC_DIR)\\A_LLM_cluster_analysis.py --cache $(DATA_DIR)\\train_sequential_cache.pkl --epochs 250 --sample-fraction 0.1 --output-dir .\\logs\\cluster --random-seed 1982783
+# Build the UHP engine executable (usable from MzingaViewer)
+engine:
+	pyinstaller ./$(SRC_DIR)/engineer.py --name BeesKneesEngine --noconsole --onefile
 
-train:
-	python $(SRC_DIR)\\A_LLM_trainer.py --train_cache $(DATA_DIR)\\train_sequential_cache_clustered.pkl	--val_cache $(DATA_DIR)\\validation_sequential_cache_clustered.pkl --board_centroids $(CLUSTER_DIR)\\boards\\cluster_centroids_kmeans_best.pkl --move_centroids $(CLUSTER_DIR)\\moves\\cluster_centroids_kmeans_best.pkl --epochs 2 --lr 0.00001 --batch_size 1 --output_dir $(OUTPUT_DIR) --output_format json --add_descriptions --verify_tokens --data_size 0.3
-
-tokenizer:
-	python $(SRC_DIR)\\A_LLM_tokenizer_test.py --tokenizer $(LLM_DIR)\\tokenizer
-
-duel:
-	python $(SRC_DIR)\\A_LLM_duel.py --model-dir $(LLM_DIR) --gnn-model $(GNN_PATH) --num-games 5 --llm-color black --output-dir logs\\duel_results\\llm_vs_random --max-moves 150
-
-nothing:
-	neofetch
-
-.PHONY: nothing data k-means train tokenizer venv duel
+.PHONY: train-gnn play-gnn bench-mcts selfplay engine
