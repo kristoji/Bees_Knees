@@ -71,9 +71,16 @@ def rebuild_game(args):
     """Replay one game and emit every position. Returns None if the game is unusable."""
     collection, game_id, board_path = args
     try:
-        gamestring = open(board_path).read().strip()
+        raw = open(board_path).read()
     except OSError:
         return None
+    # The 622 board.txt files of nokamute-6-test have the UHP "ok" token on a second
+    # line, which otherwise ends up glued to the last move and makes the whole game
+    # unparseable. Take the first non-empty line and ignore any protocol chatter.
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return ("skip", collection, game_id, "empty board.txt")
+    gamestring = lines[0]
     parts = gamestring.split(";")
     if len(parts) < 3:
         return ("skip", collection, game_id, "malformed gamestring")

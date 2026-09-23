@@ -99,8 +99,8 @@ python tools/verify_dataset.py --shards /scratch.hpc/$USER/hive_shards
 ## 3. Training
 
 ```bash
-sbatch cluster/train.sbatch                                  # l40, hidden 64, GIN x3
-sbatch --partition=rtx2080 --mem=24G cluster/train.sbatch     # prova rapida
+sbatch cluster/train.sbatch                                   # rtx2080, hidden 64, GIN x3
+sbatch --partition=l40 --cpus-per-task=8 cluster/train.sbatch  # se l40 si libera
 HIDDEN=128 LAYERS=4 EPOCHS=80 sbatch cluster/train.sbatch     # variante
 ```
 
