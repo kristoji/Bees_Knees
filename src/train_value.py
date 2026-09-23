@@ -204,7 +204,12 @@ def main():
 
     amp_dtype = None
     if not args.no_amp and device.type == "cuda":
-        amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        # torch.cuda.is_bf16_supported() answers True on Turing too, because it counts
+        # software emulation. Emulated bf16 is slower than fp16, so gate on the compute
+        # capability instead: bf16 is native from Ampere (8.0) on. The RTX 2080 Ti is
+        # 7.5 and gets fp16; the L40 is 8.9 and gets bf16.
+        major = torch.cuda.get_device_capability(device)[0]
+        amp_dtype = torch.bfloat16 if major >= 8 else torch.float16
 
     os.makedirs(args.out, exist_ok=True)
     print(f"device {device}  amp {amp_dtype}")
@@ -288,7 +293,8 @@ def main():
             break
 
     # Report the held-out split with the best checkpoint, once, at the end.
-    model.load_state_dict(torch.load(os.path.join(args.out, "best.pt"), map_location=device))
+    model.load_state_dict(torch.load(os.path.join(args.out, "best.pt"),
+                                     map_location=device, weights_only=True))
     test_idx = splits["test"].to(device)
     test_bce, test_acc = evaluate(model, corpus, test_idx, args.batch_size, amp_dtype)
     test_target = corpus.y.index_select(0, test_idx)
