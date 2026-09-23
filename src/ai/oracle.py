@@ -28,7 +28,9 @@ class Oracle:
 
         v = self.compute_heuristic(board)
         valid_moves = list(board.get_valid_moves())
-        pi = {}
+        if not valid_moves:
+            # The side to move can only pass: there is no policy to build.
+            return v, {}
         h_arr = np.zeros(len(valid_moves), dtype=float)
         for i, move in enumerate(valid_moves):
             board.safe_play(move)
@@ -43,7 +45,7 @@ class Oracle:
         #softmax
         h_arr = np.exp(h_arr - np.max(h_arr))
         h_arr /= np.sum(h_arr)
-        pi = {move: prob for move, prob in zip(valid_moves, h_arr)} if h_arr.size > 0 else {}
+        pi = {move: prob for move, prob in zip(valid_moves, h_arr)}
         return v, pi
 
     def training(self, train_data_path:str, epochs:int) -> None:

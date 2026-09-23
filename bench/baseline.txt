@@ -1,0 +1,14 @@
+seed=20260923
+==============================================================
+Board() construction                         912.70 ms
+safe_play+undo  pos0                          17.54 us
+safe_play+undo  pos1                          30.48 us
+get_valid_moves (cold)  pos0                  28.75 us
+get_valid_moves (cold)  pos1                1657.29 us
+get_valid_moves (cold)  pos2                 590.85 us
+--------------------------------------------------------------
+MCTS rollouts/s  pos0                         207.2 /s   (4.83s)
+MCTS rollouts/s  pos1                          63.8 /s   (15.68s)
+MCTS rollouts/s  pos2                          46.8 /s   (21.37s)
+MCTS rollouts/s  TOTAL                        317.8 /s
+==============================================================
