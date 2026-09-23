@@ -27,7 +27,7 @@ class Board():
         self.type: Final[GameType] = type_
         self.state: GameState = state
         self.turn: int = turn
-        self.move_strings: list[str] = []
+        self.move_strings: list[Optional[str]] = []
         self.moves: list[Optional[Move]] = []
         self._zobrist_hash: ZobristHash = ZobristHash()
         self._pos_to_bug: dict[Position, list[Bug]] = {}
@@ -52,7 +52,7 @@ class Board():
         self._play_initial_moves(moves)
 
     def __str__(self) -> str:
-        moves_part = ";".join(self.move_strings) if self.moves else ""
+        moves_part = ";".join(m if m is not None else "?" for m in self.move_strings) if self.moves else ""
         return (
             f"{self.type};{self.state};{self.current_player_color}[{self.current_player_turn}]"
             f"{';' if moves_part else ''}{moves_part}"
@@ -90,12 +90,12 @@ class Board():
         if self.state is GameState.IN_PROGRESS:
             if update_hash:
                 if len(self.moves) and self.moves[-1]:
-                    self._zobrist_hash.toggle_last_moved_piece(BugName[str(self.moves[-1].bug)].value)
+                    self._zobrist_hash.toggle_last_moved_piece(self.moves[-1].bug.index)
                 self._zobrist_hash.toggle_turn_color()
 
             self.turn += 1
-            if move_string is None:
-                move_string = self.stringify_move(move)
+            # move_string is None only on the search path (safe_play with a Move), and
+            # nothing reads move_strings there; play() always passes the real string.
             self.move_strings.append(move_string)
             self.moves.append(move)
             
@@ -105,12 +105,12 @@ class Board():
                 self._pos_to_bug.setdefault(move.destination, []).append(move.bug)
                 if move.origin:
                     if update_hash:
-                        self._zobrist_hash.toggle_piece(BugName[str(move.bug)].value, move.origin, len(self._bugs_from_pos(move.origin)))
+                        self._zobrist_hash.toggle_piece(move.bug.index, move.origin, len(self._bugs_from_pos(move.origin)))
                     self._pos_to_bug[move.origin].pop()
                 
                 if update_hash:
-                    self._zobrist_hash.toggle_last_moved_piece(BugName[str(move.bug)].value)
-                    self._zobrist_hash.toggle_piece(BugName[str(move.bug)].value, move.destination, len(self._bugs_from_pos(move.destination)))
+                    self._zobrist_hash.toggle_last_moved_piece(move.bug.index)
+                    self._zobrist_hash.toggle_piece(move.bug.index, move.destination, len(self._bugs_from_pos(move.destination)))
                 
                 self._update_cut_pos()
 
@@ -150,19 +150,19 @@ class Board():
 
                 if update_hash:
                     if len(self.moves) and self.moves[-1]:
-                        self._zobrist_hash.toggle_last_moved_piece(BugName[str(self.moves[-1].bug)].value)
+                        self._zobrist_hash.toggle_last_moved_piece(self.moves[-1].bug.index)
                     self._zobrist_hash.toggle_turn_color()
                 if move:
                     if update_hash:
-                        self._zobrist_hash.toggle_last_moved_piece(BugName[str(move.bug)].value)
-                        self._zobrist_hash.toggle_piece(BugName[str(move.bug)].value, move.destination, len(self._bugs_from_pos(move.destination)))
+                        self._zobrist_hash.toggle_last_moved_piece(move.bug.index)
+                        self._zobrist_hash.toggle_piece(move.bug.index, move.destination, len(self._bugs_from_pos(move.destination)))
                     
                     self._pos_to_bug[move.destination].pop()
                     self._bug_to_pos[move.bug] = move.origin
                     if move.origin:
                         self._pos_to_bug[move.origin].append(move.bug)
                         if update_hash:
-                            self._zobrist_hash.toggle_piece(BugName[str(move.bug)].value, move.origin, len(self._bugs_from_pos(move.origin)))
+                            self._zobrist_hash.toggle_piece(move.bug.index, move.origin, len(self._bugs_from_pos(move.origin)))
             self._update_cut_pos()
             if self.turn == 0:
                 self.state = GameState.NOT_STARTED

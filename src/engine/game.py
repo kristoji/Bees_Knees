@@ -1,5 +1,5 @@
 from typing import Final, Optional
-from engine.enums import Error, PlayerColor, BugType, Direction
+from engine.enums import Error, PlayerColor, BugType, BugName, Direction
 import re
 
 
@@ -146,16 +146,23 @@ class Bug:
             return Bug(cls.COLORS[color_code], BugType(type_str), int(bug_id or 0))
         raise Error(f"'{bug_str}' is not a valid BugString")
 
+    __slots__ = ("color", "type", "id", "name", "index")
+
     def __init__(self, color: PlayerColor, bug_type: BugType, bug_id: int = 0) -> None:
         self.color: Final[PlayerColor] = color
         self.type: Final[BugType] = bug_type
         self.id: Final[int] = bug_id
+        # There are only 28 distinct bugs, so render the name and resolve its index
+        # once. The hot path used to do BugName[str(bug)].value three times per
+        # safe_play, and __hash__ used to build a string on every dict lookup.
+        self.name: Final[str] = f"{color.code}{bug_type}{bug_id if bug_id else ''}"
+        self.index: Final[int] = BugName[self.name].value
 
     def __str__(self) -> str:
-        return f"{self.color.code}{self.type}{self.id if self.id else ''}"
+        return self.name
 
     def __hash__(self) -> int:
-        return hash(str(self))
+        return self.index
 
     def __eq__(self, other: object) -> bool:
         return (
