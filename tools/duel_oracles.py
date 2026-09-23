@@ -85,6 +85,9 @@ def main():
     parser.add_argument("--weights", required=True)
     parser.add_argument("--summary", required=True)
     parser.add_argument("--games", type=int, default=20)
+    parser.add_argument("--start-game", type=int, default=0,
+                        help="absolute index of the first game, so a job array can "
+                             "split the match and still alternate colours correctly")
     parser.add_argument("--rollouts", type=int, default=100)
     parser.add_argument("--max-plies", type=int, default=150)
     parser.add_argument("--exploration", type=int, default=5)
@@ -101,7 +104,9 @@ def main():
 
     wins = losses = draws = capped = 0
     start = time.perf_counter()
-    for game in range(args.games):
+    for game in range(args.start_game, args.start_game + args.games):
+        # Colour and seed follow the absolute index, so shard k of an array plays a
+        # distinct, reproducible slice of the same match.
         gnn_is_white = game % 2 == 0
         white = gnn if gnn_is_white else heuristic
         black = heuristic if gnn_is_white else gnn
@@ -118,7 +123,7 @@ def main():
             wins += gnn_won
             losses += not gnn_won
             result = "GNN wins" if gnn_won else "heuristic wins"
-        print(f"  game {game + 1:3d}  GNN as {'White' if gnn_is_white else 'Black'}  "
+        print(f"  game {game:3d}  GNN as {'White' if gnn_is_white else 'Black'}  "
               f"{plies:3d} plies  {result}", flush=True)
 
     decided = wins + losses
@@ -133,8 +138,9 @@ def main():
 
     if args.out:
         json.dump({"wins": wins, "losses": losses, "draws": draws, "capped": capped,
-                   "score": score, "games": args.games, "rollouts": args.rollouts,
-                   "weights": args.weights, "seconds": elapsed},
+                   "score": score, "games": args.games, "start_game": args.start_game,
+                   "rollouts": args.rollouts, "weights": args.weights,
+                   "seconds": elapsed},
                   open(args.out, "w"), indent=2)
 
 
