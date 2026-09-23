@@ -1,9 +1,13 @@
 """Deterministic fingerprint of the engine's observable behaviour.
 
 Prints one digest covering, for a set of deterministic playouts: every legal move
-set encountered, the board state, the zobrist key after every ply, and that undo
-restores the key exactly. Two revisions that agree on the digest generate the same
-moves from the same positions.
+set encountered, the board state and the turn number at every ply. Two revisions
+that agree on the digest generate the same moves from the same positions.
+
+The zobrist key is deliberately NOT part of the digest: the random tables it is
+built from are an implementation detail, and changing them changes every key
+without changing the game. It is still checked, as an invariant — every move must
+undo back to the exact key it started from.
 
     BENCH_SRC=/path/to/src python bench/difftest.py
 
@@ -49,7 +53,6 @@ def fingerprint():
             rendered = sorted(board.stringify_move(m) for m in moves)
             h.update(f"{start_index}|{ply}|{board.state}|{board.turn}|".encode())
             h.update("\x1f".join(rendered).encode())
-            h.update(f"|{board.zobrist_key:016x}".encode())
 
             if not moves:
                 # Only a pass is available.

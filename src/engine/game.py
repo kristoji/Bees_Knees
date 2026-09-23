@@ -41,6 +41,15 @@ class Position:
         idx = _DELTA_INDEX[direction]
         return self if idx > 5 else self.flat_neighbors[idx]
 
+    def __deepcopy__(self, memo):
+        # Positions are interned singletons compared by identity, so a copy would not
+        # compare equal to the original and would break every lookup keyed on it.
+        # (It would also drag the whole 4096-cell neighbour graph along.)
+        return self
+
+    def __copy__(self):
+        return self
+
 
 Position.POSITIONS = {
     (q, r): Position(q, r) for q in range(-32, 32) for r in range(-32, 32)
@@ -179,6 +188,12 @@ class Bug:
     def __hash__(self) -> int:
         return self.index
 
+    def __deepcopy__(self, memo):
+        return self   # immutable value object
+
+    def __copy__(self):
+        return self
+
     def __eq__(self, other: object) -> bool:
         return (
             self is other
@@ -218,6 +233,12 @@ class Move:
 
     def __hash__(self) -> int:
         return hash((self.bug, self.origin, self.destination))
+
+    def __deepcopy__(self, memo):
+        return self   # immutable value object
+
+    def __copy__(self):
+        return self
 
     def __eq__(self, other: object) -> bool:
         return (

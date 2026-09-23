@@ -4,7 +4,6 @@ from random import choice, uniform
 from abc import ABC, abstractmethod
 from engine.board import Board
 from engine.enums import GameState, PlayerColor, Error
-from copy import deepcopy
 from engine.game import Move
 from time import time
 from ai.oracle import Oracle
@@ -118,7 +117,10 @@ class AlphaBetaPruner(Brain):
                 move: Move = current.moves[current.move_index]
                 current.move_index += 1
 
-                child_board = deepcopy(current.board)
+                # Board.copy() rather than deepcopy: the board holds interned
+                # Positions and immutable Bugs/Moves that must not be duplicated, and
+                # it shares the caches that are keyed on global values.
+                child_board = current.board.copy()
                 move_str: str = child_board.stringify_move(move)
                 child_board.play(move_str)
                     
