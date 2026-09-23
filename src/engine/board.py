@@ -7,6 +7,17 @@ from typing import Final, Optional, Set
 from engine.enums import GameType, GameState, PlayerColor, BugName, BugType, Direction, Error, InvalidMoveError
 import inspect
 
+# Distinguishes the plies where the opening rules still change which moves are legal
+# (see get_valid_moves). Fixed values keep cache keys stable across processes.
+_OPENING_TURN_SALT: Final[tuple[int, ...]] = (
+    0x1d8e4e27c47d124f, 0x9c3a7f1b6e5d2a83, 0x4f6b8d2e1a9c5730, 0xe7215c93bd0a48f6,
+    0x3a5e9071cf2b8d46, 0x82c4d6a3195f7be0, 0x6d039b5ea87c142f, 0xb51782fc4e6d09a3,
+)
+
+
+_QUEEN: Final[dict] = {color: Bug(color, BugType.QUEEN_BEE) for color in PlayerColor}
+
+
 class Board():
     # ORIGIN: Final[Position] = Position(0, 0)
     ORIGIN: Final[Position] = Position.POSITIONS[(0, 0)]
@@ -193,7 +204,9 @@ class Board():
                 discovery_times[u] = low_link_values[u] = time[0]
                 time[0] += 1
                 children = 0
-                for v in [n for d in Direction if (n := u.get_neighbor(d)) in graph]:
+                for v in u.flat_neighbors:
+                    if v not in graph:
+                        continue
                     if v not in discovery_times:
                         parents[v] = u
                         children += 1
@@ -213,10 +226,15 @@ class Board():
             self._snapshots_art_pos[self.zobrist_key] = new_art_pos
 
     def count_queen_neighbors(self, color: PlayerColor) -> int:
-        return sum(
-            bool(self._bugs_from_pos(queen_pos.get_neighbor(d)))
-            for d in Direction.flat() 
-        ) if (queen_pos := self._pos_from_bug(Bug(color, BugType.QUEEN_BEE))) else 0
+        queen_pos = self._bug_to_pos.get(_QUEEN[color])
+        if queen_pos is None:
+            return 0
+        pos_to_bug = self._pos_to_bug
+        n = 0
+        for neighbor in queen_pos.flat_neighbors:
+            if pos_to_bug.get(neighbor):
+                n += 1
+        return n
 
     def _parse_turn(self, turn: str) -> int:
         if (match := re.fullmatch(f"({PlayerColor.WHITE}|{PlayerColor.BLACK})\\[(\\d+)\\]", turn)):
@@ -251,19 +269,16 @@ class Board():
         else:
             raise Error(f"Expected {self.turn} moves but got {len(moves)}")
 
-    def _moves_cache_key(self):
-        """Zobrist alone is not enough while the opening rules still apply.
-
-        The first two plies have their own placement rules and the queen must be down
-        by the fourth turn of each player (turn <= 7). The zobrist key only encodes the
-        parity of the turn, so a transposition back to an early position would otherwise
-        reuse a move set generated under different rules.
-        """
-        key = self.zobrist_key
-        return key if self.turn > 7 else (key, self.turn)
-
     def get_valid_moves(self) -> Set[Move]:
-        cache_key = self._moves_cache_key()
+        # Zobrist alone is not enough while the opening rules still apply: the first
+        # two plies have their own placement rules and the queen must be down by the
+        # fourth turn of each player (turn <= 7), but the key only encodes the parity
+        # of the turn. Salt the key over that window so a transposition back to an
+        # early position cannot reuse a move set generated under different rules.
+        turn = self.turn
+        cache_key = self._zobrist_hash.value
+        if turn <= 7:
+            cache_key ^= _OPENING_TURN_SALT[turn]
         if cache_key not in self._snapshots:
             moves = set()
             if self.state in (GameState.NOT_STARTED, GameState.IN_PROGRESS):
@@ -318,20 +333,28 @@ class Board():
         return self._snapshots[cache_key]
 
     def _get_valid_placements(self, color: PlayerColor) -> Set[Position]:
-        return {
-            neighbor
-            for bug, pos in self._bug_to_pos.items()
-            if bug.color is color and pos and self._is_bug_on_top(bug)
-            for direction in Direction.flat()
-            for neighbor in [pos.get_neighbor(direction)]
-            if not self._bugs_from_pos(neighbor)
-            and all(
-                not self._bugs_from_pos(neighbor.get_neighbor(d))
-                or self._bugs_from_pos(neighbor.get_neighbor(d))[-1].color is color
-                for d in Direction.flat()
-                if d != direction.opposite
-            )
-        }
+        pos_to_bug = self._pos_to_bug
+        placements: set[Position] = set()
+        for bug, pos in self._bug_to_pos.items():
+            if bug.color is not color or pos is None or not self._is_bug_on_top(bug):
+                continue
+            for i, neighbor in enumerate(pos.flat_neighbors):
+                if neighbor in placements or pos_to_bug.get(neighbor):
+                    continue
+                # The direction back towards `pos` is skipped: that is the bug we are
+                # placing next to, and it is ours by construction.
+                back = i - 3 if i >= 3 else i + 3
+                ok = True
+                for j, around in enumerate(neighbor.flat_neighbors):
+                    if j == back:
+                        continue
+                    bugs = pos_to_bug.get(around)
+                    if bugs and bugs[-1].color is not color:
+                        ok = False
+                        break
+                if ok:
+                    placements.add(neighbor)
+        return placements
 
     def _check_no_door(self, origin: Position, position: Position, direction: Direction) -> bool:
         return (origin in ((right := position.get_neighbor(direction.right_of)), (left := position.get_neighbor(direction.left_of)))) == (bool(self._bugs_from_pos(right)) == bool(self._bugs_from_pos(left)))
@@ -364,12 +387,12 @@ class Board():
         return moves
 
     def _get_grasshopper_moves(self, bug: Bug, origin: Position) -> Set[Move]:
+        pos_to_bug = self._pos_to_bug
         moves: Set[Move] = set()
-        for d in Direction.flat():
-            destination = origin.get_neighbor(d)
+        for i, destination in enumerate(origin.flat_neighbors):
             distance = 0
-            while self._bugs_from_pos(destination):
-                destination = destination.get_neighbor(d)
+            while pos_to_bug.get(destination):
+                destination = destination.flat_neighbors[i]
                 distance += 1
             if distance > 0:
                 moves.add(Move(bug, origin, destination))

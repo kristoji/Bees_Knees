@@ -4,11 +4,18 @@ import re
 
 
 class Position:
-    POSITIONS = None
+    # Positions are interned in POSITIONS and compared by identity, so the per-instance
+    # data can be precomputed once: `flat_neighbors` removes a match statement, a dict
+    # lookup and a Position.__add__ from every neighbour walk, and `zobrist_base` (filled
+    # in by engine.hash) removes the index arithmetic from every hash toggle.
+    __slots__ = ("q", "r", "hash", "flat_neighbors", "zobrist_base")
+
     def __init__(self, q: int, r: int):
         self.r = r
         self.q = q
         self.hash = (q << 32) ^ (r & 0xffffffff)
+        self.flat_neighbors: tuple = ()
+        self.zobrist_base: int = 0
 
     def __str__(self) -> str:
         return f"({self.q}, {self.r})"
@@ -17,7 +24,7 @@ class Position:
         return self.hash
 
     def __eq__(self, other: object) -> bool:
-        return self is other 
+        return self is other
 
     def __add__(self, other: object):
         return Position.POSITIONS[(self.q + other.q, self.r + other.r)] if isinstance(other, Position) else NotImplemented
@@ -26,28 +33,27 @@ class Position:
         return Position.POSITIONS[(self.q - other.q, self.r - other.r)] if isinstance(other, Position) else NotImplemented
 
     def get_neighbor(self, direction: Direction) -> "Position":
-        match direction:
-            case Direction.RIGHT:
-                p = Position.POSITIONS[(1, 0)]
-            case Direction.UP_RIGHT:
-                p = Position.POSITIONS[(0, 1)]
-            case Direction.UP_LEFT:
-                p = Position.POSITIONS[(-1, 1)]
-            case Direction.LEFT:
-                p = Position.POSITIONS[(-1, 0)]
-            case Direction.DOWN_LEFT:
-                p = Position.POSITIONS[(0, -1)]
-            case Direction.DOWN_RIGHT:
-                p = Position.POSITIONS[(1, -1)]
-            case Direction.BELOW:
-                p = Position.POSITIONS[(0, 0)]
-            case Direction.ABOVE:
-                p = Position.POSITIONS[(0, 0)]
-        return self + p
-    
+        idx = _DELTA_INDEX[direction]
+        return self if idx > 5 else self.flat_neighbors[idx]
+
+
 Position.POSITIONS = {
     (q, r): Position(q, r) for q in range(-32, 32) for r in range(-32, 32)
 }
+
+# Index order matches Direction.delta_index.
+_DELTAS = ((1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1))
+_DELTA_INDEX = {d: d.delta_index for d in Direction}
+
+# A hive of 28 pieces grown from the origin can never reach |q| or |r| = 32, so the
+# None at the boundary is unreachable; it is there only to keep the tuples uniform.
+for _coords, _p in Position.POSITIONS.items():
+    _q, _r = _coords
+    _p.flat_neighbors = tuple(
+        Position.POSITIONS.get((_q + _dq, _r + _dr)) for _dq, _dr in _DELTAS
+    )
+del _coords, _p, _q, _r
+
 # class Position:
 #     @countit
 #     def __init__(self, q: int, r: int):

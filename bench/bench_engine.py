@@ -14,7 +14,10 @@ import sys
 import time
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-sys.path.insert(0, os.path.join(ROOT, "src"))
+# --src lets the same benchmark run against a checkout of another revision, so an
+# A/B can interleave the two and cancel thermal drift.
+SRC = os.environ.get("BENCH_SRC") or os.path.join(ROOT, "src")
+sys.path.insert(0, SRC)
 
 SEED = 20260923
 
@@ -25,7 +28,7 @@ def _load_positions():
     Only the testcases with win=False are kept: a position with a mate in one ends the
     rollout at the first terminal child and measures nothing.
     """
-    source = open(os.path.join(ROOT, "src", "test_mcts.py")).read()
+    source = open(os.path.join(SRC, "test_mcts.py")).read()
     tree = ast.parse(source)
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
@@ -33,7 +36,7 @@ def _load_positions():
         ):
             cases = ast.literal_eval(node.value)
             return [c["start"] for c in cases if not c["win"]]
-    raise RuntimeError("testcases not found in src/test_mcts.py")
+    raise RuntimeError("testcases not found in %s/test_mcts.py" % SRC)
 
 
 POSITIONS = _load_positions()
