@@ -1,7 +1,8 @@
 # Training su giano.cs.unibo.it
 
 Procedura completa, dal clone ai pesi. Riferimento: *Istruzioni tecniche d'uso del
-cluster GPU DISI*, aggiornamento gennaio 2025.
+cluster GPU DISI*, aggiornamento gennaio 2025, **più quello che ho misurato sul cluster
+il 2026-09-23** — dove le due cose divergono vale la misura, segnalata come tale.
 
 ## Quello che vincola tutto
 
@@ -10,9 +11,13 @@ cluster GPU DISI*, aggiornamento gennaio 2025.
 | Quota home | **400 MB** → il venv (diversi GB) **deve** stare in `/scratch.hpc`, non nella home |
 | Cache pip | sta nella home → **sempre `--no-cache-dir`**, altrimenti satura la quota |
 | `/scratch.hpc` | i file non acceduti da **40 giorni vengono cancellati** |
-| Coda `rtx2080` | 4 core, 44 GB RAM, RTX 2080 Ti — Turing `sm_75`, 11 GB VRAM, **no bf16** |
-| Coda `l40` | 8 core, 64 GB RAM, L40 — Ada `sm_89`, 48 GB VRAM, bf16 |
-| GPU | driver **535**, **CUDA 11.8** → wheel `cu118`, non `cu128` |
+| Coda `rtx2080` | **8 nodi, tutti liberi** (default). 4 core, 44 GB RAM, RTX 2080 Ti — Turing `sm_75`, 11 GB VRAM, **no bf16** |
+| Coda `l40` | **4 nodi, tutti occupati con coda dietro**. 8 core, 64 GB RAM, L40 — Ada `sm_89`, 48 GB VRAM, bf16 |
+| Limite di tempo | **3 giorni** su entrambe |
+| GPU | driver **535.261.03**, che supporta fino a CUDA 12.2 → le wheel `cu118` vanno bene; `cu128` no |
+| `/scratch.hpc` sui nodi | **visibile**, verificato con un job: `--chdir=/scratch.hpc/...` funziona |
+| Python | **3.11.2**; `pip` di sistema **non esiste**, ma `python3 -m venv` si porta il suo (23.0.1) |
+| Estrattori RAR | **nessuno**: niente `unrar`, `unar`, `7z`, `bsdtar`, né il modulo `rarfile` |
 | `--gres=gpu:1` | va lasciata invariata: un nodo, una GPU |
 | Submit | solo da `giano.cs.unibo.it`, con `sbatch` |
 
@@ -36,10 +41,9 @@ bash cluster/discover.sh
 Stampa nomi reali delle code, limiti di tempo, GPU, versione di Python e spazio. Serve a
 confermare i parametri prima di pinnare qualunque cosa.
 
-**Un punto da chiarire subito**: la guida è ambigua sulla visibilità di `/scratch.hpc` dai
-nodi di calcolo (un paragrafo dice "solo da giano", un altro dice che non è visibile solo
-dalle *macchine di laboratorio*, e l'esempio ufficiale usa `--chdir=/scratch.hpc/...`).
-Il job da un minuto in fondo a `discover.sh` lo risolve.
+Il job da un minuto in fondo a `discover.sh` verifica che i nodi di calcolo vedano
+`/scratch.hpc`. **Già verificato il 2026-09-23: lo vedono**, quindi la guida, che su questo
+punto è ambigua, va letta nel senso che a non vederlo sono solo le macchine di laboratorio.
 
 ## 1. Ambiente
 
@@ -57,16 +61,29 @@ Il dataset originale serve **solo per i `board.txt`**: `x`, `edge_index` e `v` s
 ricostruibili da lì (verificato: 100% delle etichette e, a parte la feature di
 articolazione che era sbagliata, tutti i grafi). Quindi non servono i 10⁶ JSON.
 
+**Su giano non c'è nessun estrattore RAR**, quindi l'archivio va aperto altrove. Sul Mac
+(`bsdtar` legge RAR5) e poi rsync dei soli `board.txt`:
+
 ```bash
-mkdir -p /scratch.hpc/$USER/hive_raw && cd /scratch.hpc/$USER/hive_raw
-# scaricare Hive_dataset.rar qui (giano ha internet; da Drive serve gdown o il link diretto)
-unrar x Hive_dataset.rar "*board.txt"     # solo i board.txt: pochi MB invece di 314
-cd /scratch.hpc/$USER/Bees_Knees
-sbatch cluster/rebuild.sbatch
+# in locale
+bsdtar -xf Hive_dataset.rar -C raw --include='*/board.txt'      # ~70s, 82 MB
+rsync -a raw/ francesco.giordani5@giano.cs.unibo.it:/scratch.hpc/francesco.giordani5/hive_raw/
+
+# su giano
+cd /scratch.hpc/$USER/Bees_Knees && sbatch cluster/rebuild.sbatch
 ```
 
-Se `unrar` non c'è, `bsdtar -xf Hive_dataset.rar` legge RAR5 e c'è quasi ovunque; in
-alternativa si estrae in locale e si fa rsync dei soli `board.txt`.
+Contenuto reale dell'archivio: **21049 partite** in 14 collezioni.
+
+| gruppo | partite | incluso di default |
+|---|---|---|
+| `*_tournament` | 5162 | sì |
+| `*_bots-after-2023` | 7714 | sì |
+| `nokamute-*` | 2621 | sì — sono autopartite di motore, stessa categoria dei bot |
+| `*_humans` | 3666 | **no** |
+
+Gli shard sono per collezione, quindi la scelta si cambia senza rigenerare, con
+`--collections` in `train_value.py`.
 
 Produce shard `.npz` pre-collati in `/scratch.hpc/$USER/hive_shards` (~2 GB per l'intero
 corpus) invece di un milione di file sciolti, che su un filesystem HPC sono un problema di
@@ -109,8 +126,9 @@ per posizione mette esempi quasi identici su entrambi i lati e nasconde il probl
 
 Riferimento misurato in locale sulle sole 259 partite di campione (209 di training):
 la rete scende a val BCE 0,614 contro 0,625 dell'euristica all'epoca 10, poi va in
-overfitting netto e l'early stopping interviene. Con ~10⁴ partite ci si aspetta molto
-meglio — ma è la ragione per cui si parte con `--hidden-dim 64` e non 256.
+overfitting netto e l'early stopping interviene. Con 15497 partite (tournament + bot +
+nokamute) ci si aspetta molto meglio — ma è la ragione per cui si parte con
+`--hidden-dim 64` e non 256.
 
 ## 4. Riportare i pesi e farli giocare
 
@@ -137,6 +155,6 @@ MCTS+`Oracle` euristico a parità di rollout**, con `src/test/duel.py`.
 |---|---|
 | `No space left` / `Disk quota exceeded` durante pip | la cache di pip nella home: usare `--no-cache-dir` e `pip cache purge` |
 | `CUDA error: no kernel image is available` | wheel senza `sm_75`: sulla 2080 Ti serve una build che includa Turing. `torch==2.5.1+cu118` la include |
-| job che non parte | coda occupata: `squeue`, e provare l'altra partizione |
+| job che non parte | `l40` ha quasi sempre coda; `rtx2080` di solito è libera |
 | `best.pt` sparito dopo qualche settimana | `/scratch.hpc` cancella i file non acceduti da 40 giorni |
 | la rete non batte l'euristica | vedi `TRAINING_and_DATASET.md` §4: poche etichette indipendenti, rete troppo grande, o troppe epoche |

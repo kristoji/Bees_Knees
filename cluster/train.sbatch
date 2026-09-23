@@ -5,24 +5,27 @@
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
-#SBATCH --partition=l40
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=24G
+#SBATCH --partition=rtx2080
 #SBATCH --gres=gpu:1
 #SBATCH --chdir=/scratch.hpc/francesco.giordani5/Bees_Knees
 #SBATCH --output=/scratch.hpc/francesco.giordani5/logs/train-%j.out
 #
 # Train the value network.
 #
-#   sbatch cluster/train.sbatch                          # defaults below
-#   sbatch --partition=rtx2080 --mem=24G cluster/train.sbatch
+#   sbatch cluster/train.sbatch                                      # defaults below
+#   sbatch --partition=l40 --cpus-per-task=8 --mem=32G cluster/train.sbatch
 #   HIDDEN=128 EPOCHS=80 sbatch cluster/train.sbatch
 #
-# Notes on the two partitions:
-#   l40      8 cores, 64 GB RAM, L40 48 GB, Ada sm_89 -> bf16 autocast
-#   rtx2080  4 cores, 44 GB RAM, RTX 2080 Ti 11 GB, Turing sm_75 -> fp16 autocast
-# The model is small and the graphs are tiny, so neither card is the bottleneck; use
-# rtx2080 for quick checks and l40 for the real run.
+# Measured on the cluster (2026-09-23):
+#   rtx2080  8 nodes, usually all idle, 4 cores, 44 GB RAM, RTX 2080 Ti 11 GB,
+#            Turing sm_75, no bf16 -> fp16 autocast.  Default here because it runs
+#            immediately.
+#   l40      4 nodes, usually all allocated with jobs queued behind them, 8 cores,
+#            64 GB RAM, L40 48 GB, Ada sm_89 -> bf16 autocast.
+# Time limit is 3 days on both. The model is small and the graphs tiny, so the GPU is
+# not the bottleneck; the queue is.
 set -euo pipefail
 
 SCRATCH=/scratch.hpc/$USER

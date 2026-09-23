@@ -48,7 +48,8 @@ from engine.board import Board  # noqa: E402
 # It only counts queen neighbours, so it costs nothing to evaluate here.
 _HEURISTIC = Oracle()
 
-DEFAULT_COLLECTIONS = ("*tournament*", "*bots*")
+# nokamute-* are engine self-play games, so they belong with the bot games.
+DEFAULT_COLLECTIONS = ("*tournament*", "*bots*", "nokamute*")
 DECIDED = {"WhiteWins", "BlackWins", "Draw"}
 
 

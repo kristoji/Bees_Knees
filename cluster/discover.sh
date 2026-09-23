@@ -53,15 +53,13 @@ echo
 
 echo "=== NOTE ==="
 cat <<'TXT'
-The official guide is ambiguous about whether /scratch.hpc is visible from the compute
-nodes: one paragraph says it is only visible from giano, another says it is not visible
-only from the lab machines, and the official sbatch example uses
---chdir=/scratch.hpc/name.surname. Settle it with a one-minute job:
-
-  sbatch --partition=rtx2080 --gres=gpu:1 --time=00:01:00 \
-         --chdir=/scratch.hpc/$USER --output=scratch_check.out \
-         --wrap='hostname; pwd; ls -la; nvidia-smi'
-
-If that job writes scratch_check.out under /scratch.hpc, the compute nodes see it and
-everything below works as written.
+Checked on 2026-09-23 and true then:
+  - /scratch.hpc IS visible from the compute nodes, so --chdir=/scratch.hpc/... works.
+    (The official guide is ambiguous about this; a one-minute job settled it.)
+  - giano has no RAR extractor at all: no unrar, unar, 7z or bsdtar, and no rarfile
+    module. Extract the archive somewhere else and rsync in only the board.txt files,
+    which is all the rebuild needs.
+  - there is no system pip, but python3 -m venv bootstraps its own (pip 23.0.1).
+  - python3 is 3.11.2.
+Re-run this script if anything below fails; the cluster changes.
 TXT
