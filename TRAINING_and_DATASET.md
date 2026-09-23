@@ -163,14 +163,14 @@ Una rete allenata su etichette invertite impara a predire che chi muove *perde*,
 sceglierebbe sistematicamente le mosse peggiori — con una win rate contro il random
 *sotto* il 50%, che è il sintomo da cercare.
 
-### 3.4 La correzione: rigenerare in locale dai `board.txt`
+### 3.4 La correzione: rigenerare dai `board.txt` — **fatto**
 
 Ogni cartella partita contiene il `board.txt` con la partita completa, e ho verificato
 che il motore attuale riproduce esattamente colore, tipo, pinned, pinning e archi.
 Quindi **non serve né `gen_dataset/` né riscaricare**: basta rileggere i `board.txt`,
 rigiocarli e riscrivere gli `x` con il `_data_from_board` attuale.
 
-Lo script è breve. Per ogni `game_*/board.txt`:
+Implementato in **`tools/rebuild_dataset.py`**. Per ogni `game_*/board.txt`:
 
 1. parsare il gamestring: `type;state;turn;mossa1;mossa2;…`
 2. ricostruire `Board("Base+MLP")` e rigiocare le mosse una per una
@@ -184,8 +184,16 @@ In più, visto che si sta rigiocando tutto, conviene salvare anche **la mossa
 effettivamente giocata** come indice sulla lista delle mosse legali: è il target di
 policy che oggi manca, e senza rigiocare non è recuperabile. Vedi §4.2.
 
-Costo: ~10⁶ posizioni × ~50 µs di `_data_from_board` ≈ un'ora single-core, banalmente
-parallelizzabile per partita.
+Costo misurato: le 259 partite di campione in **2,9 s**, quindi l'intero corpus è
+questione di minuti. L'output non sono 10⁶ JSON ma shard `.npz` pre-collati (~2 GB
+complessivi), perché un milione di file sciolti è un problema di inode e metadati su un
+filesystem HPC, e una lista di 10⁶ oggetti `Data` in RAM non è gratis.
+
+La verifica è in **`tools/verify_dataset.py`**, che confronta il ricostruito con i JSON
+originali usando l'indicizzazione dell'originale (quella che salta i pass). Sul campione:
+**0 differenze fuori dalla colonna 12, 0 disaccordi sulle etichette**, e 9056 posizioni in
+cui la colonna 12 è ora corretta. Ha anche trovato un buco nel dataset pubblicato
+(`game_330` ha tre JSON mancanti) che la ricostruzione riempie.
 
 ---
 
@@ -334,4 +342,9 @@ results = logits if not use_sigmoid else torch.sigmoid(logits)
 - Non ho ispezionato le collezioni `humans` e `bots`: il campione viene tutto da
   `GRAPH-1_tournament`. Presumo lo stesso formato, visto che li produce lo stesso
   generatore, ma **non l'ho verificato**.
-- Non ho scritto lo script di rigenerazione: §3.4 ne descrive i passi, dimmi se lo vuoi.
+- Lo script di rigenerazione **ora esiste** (`tools/rebuild_dataset.py`), insieme al
+  verificatore, a un entry point di training (`src/train_value.py`) e al setup per il
+  cluster (`cluster/`, vedi `cluster/README_giano.md`).
+- Il training non è mai stato lanciato sul corpus completo: quello che ho eseguito è una
+  run di validazione sulle sole 259 partite di campione, in un venv CPU isolato, per
+  verificare che la pipeline funzioni e che l'overfitting sia visibile.
