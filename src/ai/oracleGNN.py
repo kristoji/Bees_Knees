@@ -8,6 +8,7 @@ from ai.graph_network import GraphClassifier
 from ai.oracle import Oracle
 from ai.loader import GraphDataset
 from engine.enums import BugType, Direction
+from engine.game import NEIGHBOR_INDICES
 from collections import defaultdict
 from ai.log_utils import log_header, log_subheader
 import os
@@ -18,6 +19,14 @@ SHORT = 50
 LONG = 100
 SUPERLONG = 150
 TURN_LIMIT = 100
+
+# Node feature layout, built once instead of on every _data_from_board call.
+# NOTE: column 1 is never written. The one-hot index starts at 1 and is then offset
+# by another 1, so the types land in columns 2..9 and one of the 13 features is
+# always zero. Left as is on purpose: changing it changes the network's input
+# representation, which is a modelling decision, not an optimization.
+_NUM_FEATURES = 1 + len(list(BugType)) + 1 + 3
+_TYPE_COLUMN = {bug_type: 1 + i + 1 for i, bug_type in enumerate(BugType)}
 
 class OracleGNN(Oracle):
     """
@@ -30,9 +39,14 @@ class OracleGNN(Oracle):
         self.kwargs_network = kwargs_network
         self.network = GraphClassifier(in_dim=13, hidden_dim=hidden_dim, num_classes=1, **self.kwargs_network)
         self.network.to(self.device)
-        self.cache: Dict[int, float] = {}
         self.path: Optional[str] = None
-        self.pin = (self.device.type == "cuda")
+        if self.device.type == "cuda":
+            # Global flags: these were being re-set on every single batch predict.
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            self._amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        else:
+            self._amp_dtype = None
 
         if self.device.type == 'cpu':
             os.environ["OMP_NUM_THREADS"] = "8"     # scegli in base ai core fisici
@@ -68,7 +82,10 @@ class OracleGNN(Oracle):
         if self.device.type == 'cuda':
             self.train_loader, self.test_loader = self.dataset.get_dataloader(batch_size=batch_size, train_size=0.8, shuffle=True, num_workers=0)
         else: #if we are on CPU
-            self.train_loader, self.test_loader = self.dataset.get_dataloader(batch_size=batch_size, train_size=0.8, shuffle=True, num_workers=6, pin_memory=True, persistent_workers=True, prefetch_factor=4)
+            # No pin_memory here: page-locked staging buffers only pay off for a host
+            # to device copy, and there is no device. (The CUDA branch above uses
+            # num_workers=0 on purpose: the dataset is already resident on the GPU.)
+            self.train_loader, self.test_loader = self.dataset.get_dataloader(batch_size=batch_size, train_size=0.8, shuffle=True, num_workers=6, persistent_workers=True, prefetch_factor=4)
 
         if not self.network:
             raise ValueError("Neural network is not initialized.")
@@ -138,16 +155,16 @@ class OracleGNN(Oracle):
     @torch.no_grad()
     def predict_values_batch_from_data(self, data_list, use_sigmoid=True):
         if not data_list: return []
-        batch_cpu = Batch.from_data_list(data_list)
+        batch = Batch.from_data_list(data_list)
         if self.device.type == "cuda":
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-            amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-            batch = batch_cpu.to(self.device, non_blocking=True)
-            with torch.autocast(dtype=amp_dtype):
+            # torch.autocast takes device_type as a required positional argument; the
+            # previous call omitted it and raised TypeError, so this whole CUDA branch
+            # was dead.
+            batch = batch.to(self.device, non_blocking=True)
+            with torch.autocast("cuda", dtype=self._amp_dtype):
                 out = self.network.predict(batch, use_sigmoid=use_sigmoid)
         else:
-            out = self.network.predict(batch_cpu, use_sigmoid=use_sigmoid)
+            out = self.network.predict(batch, use_sigmoid=use_sigmoid)
         return out.detach().cpu().view(-1).tolist() if isinstance(out, torch.Tensor) \
             else np.asarray(out).reshape(-1).tolist()
     
@@ -171,7 +188,7 @@ class OracleGNN(Oracle):
             # Non-blocking copy: effective if tensors were allocated in pinned memory
             batch = batch.to(self.device, non_blocking=True)
 
-            with torch.cuda.amp.autocast(dtype=amp_dtype):
+            with torch.autocast("cuda", dtype=amp_dtype):
                 out = self.network.predict(batch, use_sigmoid=use_sigmoid)
         else:
             out = self.network.predict(batch, use_sigmoid=use_sigmoid)
@@ -266,87 +283,85 @@ class OracleGNN(Oracle):
 
     # Alternative: If you still need the separate functions for compatibility
     def _data_from_board(self, board: Board) -> Optional[Data]:
-        """
-        Even faster version using numpy throughout and minimal Python loops.
+        """Build the PyG graph for a board state.
+
+        This runs once per legal move per expanded leaf, so it is the hottest Python
+        in a GNN-guided search. Changes from the previous version, all
+        output-preserving: the type table is a module constant instead of being
+        rebuilt per call; pos_bug_to_index (a dict keyed on (Position, Bug), so every
+        insert hashed a Bug) was built and never read; the per-height grouping is a
+        list of dicts keyed on dense cell indices rather than a defaultdict keyed on
+        (Position, height) tuples; edges go straight into a numpy array instead of a
+        list of Python tuples; and the tensors are no longer pinned individually.
         """
         pos_to_bug = board._pos_to_bug
         if not pos_to_bug:
             return None
-        
-        # Count total nodes first
-        total_nodes = sum(len(bugs) for bugs in pos_to_bug.values())
-        if total_nodes == 0:
-            return None
-        
-        # Setup
-        types = list(BugType)
-        type_to_index = {bug_type: (i + 1) for i, bug_type in enumerate(types)}
-        num_features = 1 + len(types) + 1 + 3  # color + one-hot type + pinned + pinning + art
-        
-        # Pre-allocate feature matrix
-        x = np.zeros((total_nodes, num_features), dtype=np.float32)
-        
-        # Tracking
-        pos_bug_to_index = {}
-        pos_height_to_idx = {}
+
         current_player = board.current_player_color
         art_pos_set = board._art_pos
-        
-        # Build nodes with vectorized operations where possible
+
+        # Nodes, grouped by stack height as we go.
+        x_rows = []
+        height_maps: List[dict] = []
+        vertical: List[tuple] = []
         node_idx = 0
         for pos, bugs in pos_to_bug.items():
+            if not bugs:
+                continue
             is_art = pos.index in art_pos_set
             num_bugs = len(bugs)
-            
+            pos_index = pos.index
+            first_idx = node_idx
             for h, bug in enumerate(bugs):
-                # Set features directly in pre-allocated array
-                x[node_idx, 0] = 1.0 if bug.color == current_player else 0.0
-                x[node_idx, 1 + type_to_index[bug.type]] = 1.0
-                x[node_idx, -3] = 1.0 if h < num_bugs - 1 else 0.0  # pinned
-                x[node_idx, -2] = 1.0 if h > 0 else 0.0  # pinning
-                x[node_idx, -1] = 1.0 if h == 0 and is_art else 0.0  # articulation
-                
-                pos_bug_to_index[(pos, bug)] = node_idx
-                pos_height_to_idx[(pos, h)] = node_idx
+                while len(height_maps) <= h:
+                    height_maps.append({})
+                height_maps[h][pos_index] = node_idx
+                x_rows.append((
+                    1.0 if bug.color == current_player else 0.0,
+                    _TYPE_COLUMN[bug.type],
+                    1.0 if h < num_bugs - 1 else 0.0,   # pinned
+                    1.0 if h > 0 else 0.0,              # pinning
+                    1.0 if h == 0 and is_art else 0.0,  # articulation
+                ))
                 node_idx += 1
-        
-        # Build edges using numpy for better performance
-        edge_list = []
-        
-        # Flat edges - batch process by height
-        by_height = defaultdict(dict)
-        for (pos, h), idx in pos_height_to_idx.items():
-            by_height[h][pos] = idx
-        
-        for h, pos_map in by_height.items():
-            for pos, i in pos_map.items():
-                for d in Direction.flat():
-                    npos = pos.get_neighbor(d)
-                    if npos in pos_map:
-                        edge_list.append((i, pos_map[npos]))
-        
-        # Vertical edges
-        for pos, bugs in pos_to_bug.items():
-            for h in range(len(bugs) - 1):
-                i = pos_height_to_idx[(pos, h)]
-                j = pos_height_to_idx[(pos, h + 1)]
-                edge_list.extend([(i, j), (j, i)])
-        
-        # Convert to tensor
-        if edge_list:
-            edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+            for h in range(num_bugs - 1):
+                i = first_idx + h
+                vertical.append((i, i + 1))
+                vertical.append((i + 1, i))
+
+        total_nodes = node_idx
+        if total_nodes == 0:
+            return None
+
+        x = np.zeros((total_nodes, _NUM_FEATURES), dtype=np.float32)
+        for i, (color, type_col, pinned, pinning, art) in enumerate(x_rows):
+            x[i, 0] = color
+            x[i, type_col] = 1.0
+            x[i, -3] = pinned
+            x[i, -2] = pinning
+            x[i, -1] = art
+
+        # Flat edges: same height, adjacent cells. Both directions appear because both
+        # endpoints are visited.
+        edges: List[tuple] = vertical
+        for pos_map in height_maps:
+            for pos_index, i in pos_map.items():
+                for neighbor_index in NEIGHBOR_INDICES[pos_index]:
+                    j = pos_map.get(neighbor_index)
+                    if j is not None:
+                        edges.append((i, j))
+
+        if edges:
+            edge_index = torch.from_numpy(
+                np.asarray(edges, dtype=np.int64).T.copy()
+            )
         else:
             edge_index = torch.empty((2, 0), dtype=torch.long)
-        
-        # Apply pinning if needed
-        if self.pin:
-            x_tensor = torch.from_numpy(x).pin_memory()
-            edge_index = edge_index.pin_memory()
-            batch = torch.zeros(total_nodes, dtype=torch.long).pin_memory()
-        else:
-            x_tensor = torch.from_numpy(x)
-            batch = torch.zeros(total_nodes, dtype=torch.long)
-        # return x_tensor, edge_index, batch
-        return Data(x=x_tensor, edge_index=edge_index, batch=batch)
-    
 
+        batch = torch.zeros(total_nodes, dtype=torch.long)
+        # pin_memory() used to be called on each of these three tiny tensors. It is a
+        # page-locking allocation with a device synchronisation: on ~30-node graphs it
+        # costs far more than the asynchronous copy it enables. If pinning is wanted it
+        # belongs on the aggregated Batch in predict_values_batch_from_data.
+        return Data(x=torch.from_numpy(x), edge_index=edge_index, batch=batch)

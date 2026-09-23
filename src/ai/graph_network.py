@@ -70,11 +70,19 @@ class MLP(torch.nn.Module):
 
 class ResidualGNNBlock(torch.nn.Module):
     """Residual block for GNN layers"""
-    def __init__(self, conv_layer, hidden_dim, dropout=0.0, use_batch_norm=False):
+    def __init__(self, conv_layer, hidden_dim, dropout=0.0, use_batch_norm=False,
+                 use_layer_norm=False):
         super(ResidualGNNBlock, self).__init__()
         self.conv = conv_layer
         self.dropout = Dropout(dropout) if dropout > 0 else torch.nn.Identity()
-        self.norm = BatchNorm1d(hidden_dim) if use_batch_norm else torch.nn.Identity()
+        # use_layer_norm used to be ignored here, so every residual configuration ran
+        # with no normalization at all regardless of what was requested.
+        if use_batch_norm:
+            self.norm = BatchNorm1d(hidden_dim)
+        elif use_layer_norm:
+            self.norm = LayerNorm(hidden_dim)
+        else:
+            self.norm = torch.nn.Identity()
         
     def forward(self, x, edge_index):
         #TODO: problema! only positive inputs, vedi slide 86 pacchetto 6 Deep Learning Prof. Silvestri, si potrebbe sistemare con un altro linear layer.
@@ -162,7 +170,8 @@ class Graph_Net(torch.nn.Module):
                               bias=True)
             
             if use_residual:
-                conv = ResidualGNNBlock(conv, hidden_dim, conv_dropout, use_batch_norm)
+                conv = ResidualGNNBlock(conv, hidden_dim, conv_dropout, use_batch_norm,
+                                        use_layer_norm)
                 self.convs.append(conv)
             else:
                 self.convs.append(conv)
@@ -284,7 +293,10 @@ class GraphClassifier(pl.LightningModule):
             return logits
     
     def predict(self, data, use_sigmoid=False):
-        self.model.eval()
+        # eval() walks every submodule; during a search this is called thousands of
+        # times per move, so only switch when the mode is actually wrong.
+        if self.model.training:
+            self.model.eval()
         with torch.no_grad():
             logits = self.forward(data, mode="predict")
             if isinstance(logits, tuple):
@@ -295,7 +307,8 @@ class GraphClassifier(pl.LightningModule):
             return results
 
     def return_embedding(self, data):
-        self.model.eval()
+        if self.model.training:
+            self.model.eval()
         with torch.no_grad():
             x, edge_index, batch_idx = data.x, data.edge_index, data.batch
             embeddings = self.model.return_embedding(x, edge_index, batch_idx)
@@ -343,24 +356,26 @@ class GraphClassifier(pl.LightningModule):
         logits, loss, _ = self.forward(batch, mode="test")
         self.log('test_loss', loss)
 
-    def train_epoch(self, train_loader: DataLoader):
-        """Custom training epoch for manual training loop"""
+    def train_epoch(self, train_loader: DataLoader, optimizer):
+        """Custom training epoch for manual training loop.
+
+        The optimizer is passed in and reused. It used to be rebuilt by
+        configure_optimizers() inside this loop, so AdamW started from zeroed first
+        and second moments on every single batch: the training was effectively
+        running without any adaptive state at all.
+        """
         self.model.train()
         total_loss = 0.0
         for batch in tqdm(train_loader, desc="Batches", leave=False):
             # Move batch to the correct device
             batch = batch.to(self.device)
-            
+
             _, loss, _ = self.forward(batch, mode="train")
-            
-            # Manual optimization
-            optimizer = self.configure_optimizers()
-            if isinstance(optimizer, dict):
-                optimizer = optimizer['optimizer']
-            optimizer.zero_grad()
+
+            optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
-            
+
             total_loss += loss.item()
         return total_loss / len(train_loader)
 
@@ -379,9 +394,13 @@ class GraphClassifier(pl.LightningModule):
         """Custom training loop with optional validation"""
         
         optimizer = self.configure_optimizers()
+        scheduler = None
         if isinstance(optimizer, dict):
+            scheduler = optimizer.get('lr_scheduler')
+            if isinstance(scheduler, dict):
+                scheduler = scheduler.get('scheduler')
             optimizer = optimizer['optimizer']
-        
+
         # Create models directory if it doesn't exist
         os.makedirs("models", exist_ok=True)
         
@@ -402,13 +421,19 @@ class GraphClassifier(pl.LightningModule):
         self.model.train()
         for epoch in tqdm(range(epochs), desc="Training", unit="epoch"):
             # Training
-            train_loss = self.train_epoch(train_loader)
+            train_loss = self.train_epoch(train_loader, optimizer)
             train_losses.append(train_loss)
-            
+
             # Validation
             if val_loader:
                 val_loss = self.validate_epoch(val_loader)
                 val_losses.append(val_loss)
+
+            if scheduler is not None:
+                if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    scheduler.step(val_loss if val_loader else train_loss)
+                else:
+                    scheduler.step()
             
             # Save checkpoint
             if (epoch+1) % 5 == 0 and epoch != 0:
