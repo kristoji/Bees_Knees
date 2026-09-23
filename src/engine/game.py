@@ -8,13 +8,18 @@ class Position:
     # data can be precomputed once: `flat_neighbors` removes a match statement, a dict
     # lookup and a Position.__add__ from every neighbour walk, and `zobrist_base` (filled
     # in by engine.hash) removes the index arithmetic from every hash toggle.
-    __slots__ = ("q", "r", "hash", "flat_neighbors", "zobrist_base")
+    __slots__ = ("q", "r", "hash", "index", "flat_neighbors", "neighbor_indices", "zobrist_base")
 
     def __init__(self, q: int, r: int):
         self.r = r
         self.q = q
         self.hash = (q << 32) ^ (r & 0xffffffff)
+        # Dense 0..4095 id. Hot inner loops (Tarjan, occupancy) key on this instead
+        # of on the object, so dict/set operations use the C int hash rather than a
+        # Python-level Position.__hash__ call.
+        self.index: int = (q + 32) * 64 + (r + 32)
         self.flat_neighbors: tuple = ()
+        self.neighbor_indices: tuple = ()
         self.zobrist_base: int = 0
 
     def __str__(self) -> str:
@@ -52,7 +57,17 @@ for _coords, _p in Position.POSITIONS.items():
     _p.flat_neighbors = tuple(
         Position.POSITIONS.get((_q + _dq, _r + _dr)) for _dq, _dr in _DELTAS
     )
+    # -1 marks "off the grid"; it can never be an occupied index, so callers skip it
+    # without a special case.
+    _p.neighbor_indices = tuple(n.index if n is not None else -1 for n in _p.flat_neighbors)
 del _coords, _p, _q, _r
+
+# Flat lookup tables indexed by Position.index, so the graph walks never touch a
+# Position object at all.
+POSITION_BY_INDEX: tuple = tuple(
+    sorted(Position.POSITIONS.values(), key=lambda p: p.index)
+)
+NEIGHBOR_INDICES: tuple = tuple(p.neighbor_indices for p in POSITION_BY_INDEX)
 
 # class Position:
 #     @countit

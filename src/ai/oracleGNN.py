@@ -295,7 +295,7 @@ class OracleGNN(Oracle):
         # Build nodes with vectorized operations where possible
         node_idx = 0
         for pos, bugs in pos_to_bug.items():
-            is_art = pos in art_pos_set
+            is_art = pos.index in art_pos_set
             num_bugs = len(bugs)
             
             for h, bug in enumerate(bugs):

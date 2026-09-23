@@ -1,8 +1,8 @@
 from collections import defaultdict
-from random import choice
+from random import choice, Random as _Random
 import re
 from engine.hash import ZobristHash
-from engine.game import Position, Bug, Move
+from engine.game import Position, Bug, Move, NEIGHBOR_INDICES
 from typing import Final, Optional, Set
 from engine.enums import GameType, GameState, PlayerColor, BugName, BugType, Direction, Error, InvalidMoveError
 import inspect
@@ -16,6 +16,13 @@ _OPENING_TURN_SALT: Final[tuple[int, ...]] = (
 
 
 _QUEEN: Final[dict] = {color: Bug(color, BugType.QUEEN_BEE) for color in PlayerColor}
+
+# Articulation points depend only on which cells are occupied, not on which bug sits
+# where, how tall the stacks are or whose turn it is. Keying their cache on a hash of
+# the occupied set therefore hits far more often than keying it on the zobrist.
+_shape_rng = _Random(0x5DEECE66D)
+_SHAPE_RANDOM: Final[tuple[int, ...]] = tuple(_shape_rng.getrandbits(64) for _ in range(4096))
+del _shape_rng
 
 
 class Board():
@@ -46,9 +53,13 @@ class Board():
                 else:
                     self._bug_to_pos[Bug(color, BugType(expansion.name))] = None
         self._draw_counter: dict[int, int] = defaultdict(lambda: 0)
-        self._art_pos: set[Position] = set()
+        # Indices of the currently occupied cells, and an incremental hash of that
+        # set. Both are maintained by safe_play/undo.
+        self._occupied: set[int] = set()
+        self._shape_key: int = 0
+        self._art_pos: set[int] = set()
         self._snapshots: dict[int, set[Move]] = {}
-        self._snapshots_art_pos: dict[int, set[Position]] = {}
+        self._snapshots_art_pos: dict[int, set[int]] = {}
         self._play_initial_moves(moves)
 
     def __str__(self) -> str:
@@ -102,12 +113,27 @@ class Board():
             if move:
 
                 self._bug_to_pos[move.bug] = move.destination
-                self._pos_to_bug.setdefault(move.destination, []).append(move.bug)
+                dest_stack = self._pos_to_bug.get(move.destination)
+                if dest_stack:
+                    dest_stack.append(move.bug)
+                else:
+                    if dest_stack is None:
+                        self._pos_to_bug[move.destination] = [move.bug]
+                    else:
+                        dest_stack.append(move.bug)
+                    dest_index = move.destination.index
+                    self._occupied.add(dest_index)
+                    self._shape_key ^= _SHAPE_RANDOM[dest_index]
                 if move.origin:
                     if update_hash:
                         self._zobrist_hash.toggle_piece(move.bug.index, move.origin, len(self._bugs_from_pos(move.origin)))
-                    self._pos_to_bug[move.origin].pop()
-                
+                    origin_stack = self._pos_to_bug[move.origin]
+                    origin_stack.pop()
+                    if not origin_stack:
+                        origin_index = move.origin.index
+                        self._occupied.discard(origin_index)
+                        self._shape_key ^= _SHAPE_RANDOM[origin_index]
+
                 if update_hash:
                     self._zobrist_hash.toggle_last_moved_piece(move.bug.index)
                     self._zobrist_hash.toggle_piece(move.bug.index, move.destination, len(self._bugs_from_pos(move.destination)))
@@ -157,10 +183,25 @@ class Board():
                         self._zobrist_hash.toggle_last_moved_piece(move.bug.index)
                         self._zobrist_hash.toggle_piece(move.bug.index, move.destination, len(self._bugs_from_pos(move.destination)))
                     
-                    self._pos_to_bug[move.destination].pop()
+                    dest_stack = self._pos_to_bug[move.destination]
+                    dest_stack.pop()
+                    if not dest_stack:
+                        dest_index = move.destination.index
+                        self._occupied.discard(dest_index)
+                        self._shape_key ^= _SHAPE_RANDOM[dest_index]
                     self._bug_to_pos[move.bug] = move.origin
                     if move.origin:
-                        self._pos_to_bug[move.origin].append(move.bug)
+                        origin_stack = self._pos_to_bug.get(move.origin)
+                        if origin_stack:
+                            origin_stack.append(move.bug)
+                        else:
+                            if origin_stack is None:
+                                self._pos_to_bug[move.origin] = [move.bug]
+                            else:
+                                origin_stack.append(move.bug)
+                            origin_index = move.origin.index
+                            self._occupied.add(origin_index)
+                            self._shape_key ^= _SHAPE_RANDOM[origin_index]
                         if update_hash:
                             self._zobrist_hash.toggle_piece(move.bug.index, move.origin, len(self._bugs_from_pos(move.origin)))
             self._update_cut_pos()
@@ -189,41 +230,70 @@ class Board():
 
 
     def _update_cut_pos(self) -> None:
-        if self.zobrist_key in self._snapshots_art_pos:
-            new_art_pos = self._snapshots_art_pos[self.zobrist_key]
-            self._art_pos.clear()
-            self._art_pos.update(new_art_pos)
-        elif (graph := {pos for pos, bugs in self._pos_to_bug.items() if bugs}):
-            new_art_pos: set[Position] = set()
-            discovery_times: dict[Position, int] = {}
-            low_link_values: dict[Position, int] = {}
-            parents: dict[Position, Optional[Position]] = {}
-            time: list[int] = [0] # Using list for mutability.
-            # Define DFS for Tarjan's algorithm.
-            def dfs(u: Position):
-                discovery_times[u] = low_link_values[u] = time[0]
-                time[0] += 1
-                children = 0
-                for v in u.flat_neighbors:
-                    if v not in graph:
-                        continue
-                    if v not in discovery_times:
-                        parents[v] = u
-                        children += 1
-                        dfs(v)
-                        low_link_values[u] = min(low_link_values[u], low_link_values[v])
-                        if parents.get(u) is None and children > 1:
-                            new_art_pos.add(u)
-                        if parents.get(u) is not None and low_link_values[v] >= discovery_times[u]:
-                            new_art_pos.add(u)
-                    elif v != parents.get(u):
-                        low_link_values[u] = min(low_link_values[u], discovery_times[v])
-            # Run DFS starting from any node, since the graph is connected.
-            dfs(next(iter(graph)))
-            # Update current articulation positions.
-            self._art_pos.clear()
-            self._art_pos.update(new_art_pos)
-            self._snapshots_art_pos[self.zobrist_key] = new_art_pos
+        """Recompute the articulation points of the hive.
+
+        Cached on the shape of the hive rather than on the zobrist key: which bug sits
+        where, how tall the stacks are and whose turn it is do not change which cells
+        are cut vertices, so many distinct zobrist keys share one answer.
+
+        Tarjan's algorithm runs iteratively over dense cell indices; the recursive
+        version over Position objects was the single hottest thing in a search, and
+        every set/dict probe went through a Python-level Position.__hash__.
+        """
+        cached = self._snapshots_art_pos.get(self._shape_key)
+        if cached is not None:
+            self._art_pos = cached
+            return
+
+        occupied = self._occupied
+        if not occupied:
+            return
+
+        art: set[int] = set()
+        disc: dict[int, int] = {}
+        low: dict[int, int] = {}
+        parent: dict[int, int] = {}
+        neighbors = NEIGHBOR_INDICES
+
+        root = next(iter(occupied))
+        disc[root] = low[root] = 0
+        timer = 1
+        root_children = 0
+        stack = [(root, iter(neighbors[root]))]
+
+        while stack:
+            u, it = stack[-1]
+            descended = False
+            for v in it:
+                if v not in occupied:
+                    continue
+                if v not in disc:
+                    parent[v] = u
+                    if u == root:
+                        root_children += 1
+                    disc[v] = low[v] = timer
+                    timer += 1
+                    stack.append((v, iter(neighbors[v])))
+                    descended = True
+                    break
+                if v != parent.get(u):
+                    dv = disc[v]
+                    if dv < low[u]:
+                        low[u] = dv
+            if not descended:
+                stack.pop()
+                if stack:
+                    p = stack[-1][0]
+                    lu = low[u]
+                    if lu < low[p]:
+                        low[p] = lu
+                    if p != root and lu >= disc[p]:
+                        art.add(p)
+        if root_children > 1:
+            art.add(root)
+
+        self._art_pos = art
+        self._snapshots_art_pos[self._shape_key] = art
 
     def count_queen_neighbors(self, color: PlayerColor) -> int:
         queen_pos = self._bug_to_pos.get(_QUEEN[color])
@@ -484,7 +554,7 @@ class Board():
         #                 stack.add(neighbor)
         #     return all(pos in visited for pos in neighbors_pos)
         # return True
-        return position not in self._art_pos
+        return position.index not in self._art_pos
 
     def _can_bug_be_played(self, piece: Bug) -> bool:
         # assert piece.pos is None
