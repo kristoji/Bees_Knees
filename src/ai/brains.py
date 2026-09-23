@@ -50,8 +50,12 @@ class Brain(ABC):
 
 class Random(Brain):
     def calculate_best_move(self, board: Board, restriction: str, value: int) -> str:
-        moves = board.valid_moves.split(";")
-        return choice(moves)
+        moves = board.get_valid_moves()
+        if not moves:
+            return Move.PASS
+        # Stringify only the move we picked: board.valid_moves would build the UHP
+        # string for every legal move (~2us each) just to throw all but one away.
+        return board.stringify_move(choice(tuple(moves)))
 
 class AlphaBetaPruner(Brain):
 
@@ -150,7 +154,10 @@ class AlphaBetaPruner(Brain):
             case GameState.DRAW:
                 return 0
             case GameState.IN_PROGRESS:        
-                score: int = len(board.get_valid_moves(PlayerColor.WHITE)) - len(board.get_valid_moves(PlayerColor.BLACK))
+                # get_valid_moves() only generates for the side to move, so mobility is
+                # signed by whose turn it is rather than differenced between the colours.
+                mobility: int = len(board.get_valid_moves())
+                score: int = mobility if board.current_player_color == PlayerColor.WHITE else -mobility
                 score += self._eval_cost * (- board.count_queen_neighbors(PlayerColor.WHITE) + board.count_queen_neighbors(PlayerColor.BLACK))
                 return score
 
@@ -181,6 +188,7 @@ class MCTS(Brain):
         self.start_time = time()
         self.debug = debug
         self.counter = 0  # used to check if the number of visits to the node is equal to the sum of visits to its children
+        self.last_rollouts = 0  # rollouts actually completed by the last search
 
     def calculate_best_move(self, board: Board, restriction: str, value: int, debug:bool = False) -> str:
         if restriction == "depth":
@@ -232,15 +240,12 @@ class MCTS(Brain):
     def do_rollout(self) -> None:
         "Make the tree one layer better. (Train for one iteration.)"
         leaf = self._select_and_expand()
-        print_log("Selection done")
 
         
         reward = 1 - leaf.reward()      # perché ci interessa vedere i valori di Q e W dal padre (che ha colore opposto)
-        print_log("Simulation done")
 
         
         self._backpropagate(leaf, reward)
-        print_log("Backpropagation done")
 
         return leaf.is_terminal
         
@@ -255,7 +260,6 @@ class MCTS(Brain):
     
         while True:
 
-            print_log(f"Current node: {curr_node}")
 
             if curr_node.is_unexplored or curr_node.is_terminal:
                 break
@@ -266,7 +270,6 @@ class MCTS(Brain):
             curr_board.safe_play(curr_node.move)
             number_of_moves += 1
         
-        print_log(f"Leaf node: {curr_node}")
 
         if curr_node.is_terminal and curr_node.V == -1:
             # compute the heuristic (only once) IF DRAW because, when calling the reward function, we want to avoid the DRAW if winning
@@ -275,7 +278,6 @@ class MCTS(Brain):
 
         # expand di curr_node (non può essere terminale)
         elif curr_node.is_unexplored:
-            print_log("Nodo unexplored -> expand")
             v, pi = self.oracle.predict(curr_board)
             curr_node.expand(curr_board, v, pi)
 
@@ -296,7 +298,6 @@ class MCTS(Brain):
             leaf.W += reward
             leaf.Q = leaf.W / leaf.N
             reward = 1 - reward # TODO: invece di tenere V in [0,1], tenerlo in [-inf, inf] e fare reward = -reward
-            print_log(f"Backpropagation: {leaf} -> N = {leaf.N}, Q = {leaf.Q}")
             leaf = leaf.parent
             
     def _uct_select(self, node: Node_mcts, verbose=False) -> Node_mcts:
@@ -305,14 +306,18 @@ class MCTS(Brain):
         if verbose:
             print(f"Father node N: {node.N}, sum children N: {sum(child.N for child in node.children)}", flush=True)
         
-        s = sum(child.N for child in node.children)
-        assert (node.N -1 == s), "The number of visits to the node must be equal to the sum of visits to its children."
-        sqrt_N_vertex = math.sqrt(node.N-1)
-        def uct_Norels(n:Node_mcts) -> float:
-            return n.Q + self.exploration_weight * n.P * sqrt_N_vertex / (1 + n.N) #----> FIXED EXPL WEIGHT
-            #return n.Q + (1 + (time() - self.start_time) / self.time_limit *(self.exploration_weight - 1)) * n.P * sqrt_N_vertex / (1 + n.N) # -----> LINEAR EXPL WEIGHT DURING TURN (NO SENSE)
-
-        return max(node.children, key=uct_Norels)
+        if __debug__ and verbose:
+            assert node.N - 1 == sum(child.N for child in node.children), \
+                "The number of visits to the node must be equal to the sum of visits to its children."
+        c = self.exploration_weight * math.sqrt(max(1, node.N - 1))
+        best = None
+        best_score = -INF
+        for n in node.children:
+            score = n.Q + c * n.P / (1 + n.N)
+            if score > best_score:
+                best_score = score
+                best = n
+        return best
 
     def run_simulation_from(self, board: Board, debug: bool=False) -> None:
         self.init_board = board
@@ -328,12 +333,13 @@ class MCTS(Brain):
         terminal_states = 0
 
         if self.time_limit < float("inf"):
-            self.num_rollouts = 0
+            done = 0
             start_time = time()
             while time() - start_time < self.time_limit - self.epsilon:
                 if self.do_rollout() and debug: # return true if new leaf is terminal
                     terminal_states += 1
-                self.num_rollouts += 1
+                done += 1
+            self.last_rollouts = done
         else:
             if debug:
                 for _ in tqdm(range(self.num_rollouts), desc="Rollouts", unit="rollout"):
@@ -343,9 +349,10 @@ class MCTS(Brain):
                 for _ in range(self.num_rollouts):
                     if self.do_rollout() and debug: # return true if new leaf is terminal
                         terminal_states += 1
-        
+            self.last_rollouts = self.num_rollouts
+
         if debug:
-            print(f"\nTerminal states {terminal_states}/{self.num_rollouts} rollouts", flush=True)
+            print(f"\nTerminal states {terminal_states}/{self.last_rollouts} rollouts", flush=True)
 
     def action_selection(self, training=False, debug:bool = False) -> str:
         # , board: Board
@@ -358,8 +365,9 @@ class MCTS(Brain):
         # assert board == self.init_board
         
         moves_probabilities = {}
+        total = max(1, sum(child.N for child in self.init_node.children))
         for child in self.init_node.children:
-            moves_probabilities[child.move] = child.N / self.num_rollouts
+            moves_probabilities[child.move] = child.N / total
 
         return moves_probabilities
     

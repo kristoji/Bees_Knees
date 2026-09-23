@@ -88,39 +88,49 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--rollouts", type=int, default=0)
+    parser.add_argument("--repeat", type=int, default=3,
+                        help="take the best of N runs; CPU frequency scaling makes a "
+                             "single run bimodal by a factor of ~2")
     args = parser.parse_args()
 
     board_reps = 1 if args.quick else 3
     play_reps = 2000 if args.quick else 10000
     cold_reps = 200 if args.quick else 1000
-    rollouts = args.rollouts or (200 if args.quick else 1000)
+    rollouts = args.rollouts or (200 if args.quick else 500)
+    repeat = max(1, args.repeat)
+
+    def best_time(fn):
+        return min(fn() for _ in range(repeat))
+
+    def best_rate(fn):
+        return max(fn() for _ in range(repeat))
 
     from engine.board import Board
 
     print(f"seed={SEED}")
     print("=" * 62)
 
-    dt = bench_board_construction(board_reps)
-    print(f"{'Board() construction':<40} {dt * 1e3:10.2f} ms")
+    dt = best_time(lambda: bench_board_construction(board_reps))
+    print(f"{'Board() construction':<40} {dt * 1e3:10.4f} ms")
 
     for i, gs in enumerate(POSITIONS):
         board = Board(gs)
         moves = sorted(board.get_valid_moves(), key=str)[:5]
         if not moves:
             continue
-        dt = bench_play_undo(board, moves, play_reps // 5)
+        dt = best_time(lambda: bench_play_undo(board, moves, play_reps // 5))
         print(f"{'safe_play+undo  pos' + str(i):<40} {dt * 1e6:10.2f} us")
 
     for i, gs in enumerate(POSITIONS):
-        dt = bench_valid_moves_cold(gs, cold_reps)
+        dt = best_time(lambda: bench_valid_moves_cold(gs, cold_reps))
         print(f"{'get_valid_moves (cold)  pos' + str(i):<40} {dt * 1e6:10.2f} us")
 
     print("-" * 62)
     total = 0.0
     for i, gs in enumerate(POSITIONS):
-        rate, elapsed = bench_mcts(gs, rollouts)
+        rate = best_rate(lambda: bench_mcts(gs, rollouts)[0])
         total += rate
-        print(f"{'MCTS rollouts/s  pos' + str(i):<40} {rate:10.1f} /s   ({elapsed:.2f}s)")
+        print(f"{'MCTS rollouts/s  pos' + str(i):<40} {rate:10.1f} /s")
     print(f"{'MCTS rollouts/s  TOTAL':<40} {total:10.1f} /s")
     print("=" * 62)
 

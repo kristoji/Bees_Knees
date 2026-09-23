@@ -110,12 +110,12 @@ class Node_mcts():
             else:
                 return 0    # black win
         elif self.gamestate == GameState.DRAW:
-            return 1 - self.V
-            # # return 0
-            return 0.5
+            # V is set lazily by the searcher; -1 means "never evaluated", in which
+            # case the old code returned 2 and poisoned W/Q all the way up the tree.
+            return 0.5 if self.V < 0 else 1 - self.V
         else:
             # ritorna la stima di vittoria della rete: V
-            return self.V
+            return 0.5 if self.V < 0 else self.V
             
     def __hash__(self) -> int:
         "Nodes must be hashable"

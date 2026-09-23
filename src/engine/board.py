@@ -132,7 +132,10 @@ class Board():
                 self.turn -= 1
                 self.move_strings.pop()
                 move = self.moves.pop()
-                self._draw_counter[self.zobrist_key] -= 1
+                if move:
+                    # safe_play only counts real moves, so a pass must not decrement here
+                    # (the key is still the post-move one: the hash is untoggled below).
+                    self._draw_counter[self.zobrist_key] -= 1
 
                 if update_hash:
                     if len(self.moves) and self.moves[-1]:
@@ -209,7 +212,7 @@ class Board():
             self._art_pos.update(new_art_pos)
             self._snapshots_art_pos[self.zobrist_key] = new_art_pos
 
-    def count_queen_neighbors(self, color: PlayerColor = current_player_color) -> int:
+    def count_queen_neighbors(self, color: PlayerColor) -> int:
         return sum(
             bool(self._bugs_from_pos(queen_pos.get_neighbor(d)))
             for d in Direction.flat() 
@@ -248,9 +251,20 @@ class Board():
         else:
             raise Error(f"Expected {self.turn} moves but got {len(moves)}")
 
+    def _moves_cache_key(self):
+        """Zobrist alone is not enough while the opening rules still apply.
+
+        The first two plies have their own placement rules and the queen must be down
+        by the fourth turn of each player (turn <= 7). The zobrist key only encodes the
+        parity of the turn, so a transposition back to an early position would otherwise
+        reuse a move set generated under different rules.
+        """
+        key = self.zobrist_key
+        return key if self.turn > 7 else (key, self.turn)
+
     def get_valid_moves(self) -> Set[Move]:
-        
-        if not self.zobrist_key in self._snapshots:
+        cache_key = self._moves_cache_key()
+        if cache_key not in self._snapshots:
             moves = set()
             if self.state in (GameState.NOT_STARTED, GameState.IN_PROGRESS):
                 # self._update_cut_pos()
@@ -300,10 +314,10 @@ class Board():
                                         moves.update(self._get_mosquito_moves(bug, pos, True))
                                     case BugType.PILLBUG:
                                         moves.update(self._get_pillbug_special_moves(pos))
-            self._snapshots[self.zobrist_key] = moves
-        return self._snapshots[self.zobrist_key] or set()
+            self._snapshots[cache_key] = moves
+        return self._snapshots[cache_key]
 
-    def _get_valid_placements(self, color: PlayerColor = current_player_color) -> Set[Position]:
+    def _get_valid_placements(self, color: PlayerColor) -> Set[Position]:
         return {
             neighbor
             for bug, pos in self._bug_to_pos.items()
