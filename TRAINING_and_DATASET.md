@@ -1,9 +1,11 @@
 # Dataset e training della GNN — analisi
 
 Ispezione di `Hive_dataset.rar` (Drive, 314 MB) e revisione del setup di training.
-**Nessun training è stato lanciato.** Del dataset ho scaricato solo **6 MB** (i primi 4 e
-gli ultimi 2), che bastano per leggere gli header dell'archivio ed estrarre 259 partite
-complete di campione.
+
+> **Aggiornamento**: il dataset è stato poi ricostruito per intero e il training è girato
+> su `giano.cs.unibo.it`. I risultati sono in §7, in fondo. L'analisi che segue è quella
+> fatta *prima*, sul campione, ed è lasciata com'era — comprese le previsioni che i
+> numeri veri hanno poi confermato o smentito.
 
 ---
 
@@ -348,3 +350,77 @@ results = logits if not use_sigmoid else torch.sigmoid(logits)
 - Il training non è mai stato lanciato sul corpus completo: quello che ho eseguito è una
   run di validazione sulle sole 259 partite di campione, in un venv CPU isolato, per
   verificare che la pipeline funzioni e che l'overfitting sia visibile.
+
+---
+
+## 7. Cosa è successo davvero
+
+Il dataset è stato ricostruito con `tools/rebuild_dataset.py` e il training è girato sul
+cluster DISI. Numeri veri, non stime.
+
+### Il dataset
+
+L'archivio conteneva **più di quanto avessi stimato**: 21049 partite in 14 collezioni,
+non ~14k in 10-12. Nei 2 MB di coda che avevo campionato non comparivano le collezioni
+`nokamute-*`, che sono **autopartite di un motore di Hive** — e che quindi rientrano fra
+le "partite di bot", non fra quelle umane.
+
+Ricostruito (tournament + bots + nokamute, esclusi gli humans):
+
+| | |
+|---|---|
+| partite tenute | **15325 su 15497** (98,9%) |
+| posizioni | **817269** |
+| shard | 1,2 GB, generati in 89 s |
+| scarti | 171 partite senza esito registrato (`NotStarted`) + 1 patta che il motore chiude un ply prima |
+
+**Un bug che il campione non poteva mostrare**: i 622 `board.txt` di `nokamute-6-test`
+hanno il token UHP `ok` su una seconda riga. `read().strip()` lo lasciava incollato
+all'ultima mossa, rendendo ingiocabile l'intera collezione — zero grafi prodotti. È il
+tipo di difetto che si trova solo girando a scala piena.
+
+La rigenerazione su giano ha prodotto **numeri identici** a quella locale, con Python e
+numpy diversi.
+
+### Il training
+
+Due run, identiche tranne le collezioni, per rispondere alla domanda "le autopartite del
+motore aiutano o inquinano?".
+
+| run | collezioni | test BCE | test acc | euristica BCE | euristica acc |
+|---|---|---|---|---|---|
+| **A** con nokamute | 10 | **0,5336** | **0,725** | 0,6659 | 0,569 |
+| B senza nokamute | 7 | 0,5588 | 0,713 | 0,6629 | 0,574 |
+
+**La rete batte nettamente l'euristica**: 72,5% contro 56,9% di accuratezza su partite di
+test mai viste, con lo split per partita — quindi il numero è onesto.
+
+**Le partite nokamute aiutano.** Il mio dubbio (un solo motore, i suoi bias diventano
+verità) era ragionevole ma la misura dice di no: la run A è migliore su entrambe le
+metriche.
+
+### Le previsioni di §4, verificate
+
+- **Overfitting** (§4.1): previsto, e sul campione da 209 partite si vedeva chiaramente
+  (val BCE risale da 0,614 a 0,69 in dieci epoche). Con 12261 partite di training sparisce:
+  train 0,545 contro val 0,584, divario modesto, early stopping all'epoca 48. La diagnosi
+  era giusta e la cura — più partite indipendenti, rete piccola — ha funzionato. La rete
+  usata ha **26817 parametri**, non 1,25 M.
+- **Split per partita** (§4.1): è ciò che ha reso l'overfitting visibile sul campione.
+  Con lo split per posizione non si sarebbe visto nulla.
+- **Costo dell'espansione senza policy head** (§4.2): confermato e ora quantificato. In
+  una posizione tipica a 8 ply ci sono **74 mosse legali**, quindi ogni espansione costa 75
+  valutazioni di rete. Misurato sul cluster: 1,94 s per mossa a 100 rollout, 7,13 s a 400,
+  **28 s a 1600** — circa 17,5 ms per rollout. Una policy head porterebbe l'espansione da
+  75 valutazioni a 1.
+
+### Quello che ancora non sappiamo
+
+La BCE dice che la rete **predice** meglio. Non dice che l'albero **gioca** meglio.
+`tools/duel_oracles.py` mette MCTS+GNN contro MCTS+euristica con lo stesso searcher e lo
+stesso budget di rollout, alternando i colori; l'euristica è avvolta in un adattatore così
+che fra i due lati cambi solo la funzione di valore.
+
+Primo segnale, da non sopravvalutare: a 100 rollout per mossa le partite finivano tutte
+sul limite dei 120 ply senza che nessuno vincesse. Se succede anche a 1600, la risposta
+non è alzare i rollout ma alzare il cap o cambiare metrica.
