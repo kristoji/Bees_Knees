@@ -6,8 +6,10 @@ import torch
 from torch_geometric.data import Data, Batch
 from ai.graph_network import GraphClassifier
 from ai.oracle import Oracle
+from ai.agent_net import segment_log_softmax
 from ai.loader import GraphDataset
 from ai.board_graph import board_to_graph
+from ai.move_index import index_moves
 from collections import defaultdict
 from ai.log_utils import log_header, log_subheader
 import os
@@ -33,6 +35,7 @@ class OracleGNN(Oracle):
         self.network = GraphClassifier(in_dim=13, hidden_dim=hidden_dim, num_classes=1, **self.kwargs_network)
         self.network.to(self.device)
         self.path: Optional[str] = None
+        self.policy_net = None   # set by load_agent() when a policy head is available
         if self.device.type == "cuda":
             # Global flags: these were being re-set on every single batch predict.
             torch.backends.cuda.matmul.allow_tf32 = True
@@ -280,6 +283,86 @@ class OracleGNN(Oracle):
             arr /= np.sum(arr)
             pi = {m: float(p) for m, p in zip(valid_moves, arr.tolist())}
         return v, pi
+
+    @torch.no_grad()
+    def evaluate_positions(self, boards: List[Board]):
+        """Value and move priors for several positions in ONE forward pass.
+
+        This is the whole point of the policy head. The value-only path builds a prior by
+        running the network on every child, b+1 passes per expansion with b averaging 62
+        on this corpus; here one pass covers the position and all of its legal moves.
+
+        Returns a list of (value, {move: prior}); a position with no legal move gets an
+        empty dict.
+        """
+        if self.policy_net is None:
+            raise RuntimeError("this oracle has no policy head; load an AgentNet checkpoint")
+        from torch_geometric.data import Batch as _Batch
+
+        graphs, per_board = [], []
+        for board in boards:
+            built = board_to_graph(board)
+            if built is None:
+                per_board.append(None)
+                continue
+            x, edge_index = built
+            moves, src, bug, dst, _ = index_moves(board)
+            per_board.append((moves, src, bug, dst, x.shape[0]))
+            graphs.append(Data(x=torch.from_numpy(x),
+                               edge_index=torch.from_numpy(edge_index)))
+        if not graphs:
+            return [(0.5, {}) for _ in boards]
+
+        batch = _Batch.from_data_list(graphs).to(self.device)
+
+        # Move indices are local to their own graph, so shift them by that graph's node
+        # offset, leaving -1 (in hand / padding) alone.
+        offsets, all_src, all_bug, all_dst, seg = [], [], [], [], []
+        running, gi = 0, 0
+        for entry in per_board:
+            if entry is None:
+                continue
+            moves, src, bug, dst, n_nodes = entry
+            s_ = torch.from_numpy(src.astype(np.int64))
+            d_ = torch.from_numpy(dst.astype(np.int64))
+            all_src.append(torch.where(s_ >= 0, s_ + running, s_))
+            all_dst.append(torch.where(d_ >= 0, d_ + running, d_))
+            all_bug.append(torch.from_numpy(bug.astype(np.int64)))
+            seg.append(torch.full((len(moves),), gi, dtype=torch.long))
+            running += n_nodes
+            gi += 1
+        src_t = torch.cat(all_src).to(self.device)
+        bug_t = torch.cat(all_bug).to(self.device)
+        dst_t = torch.cat(all_dst).to(self.device)
+        seg_t = torch.cat(seg).to(self.device)
+
+        value, move_logits = self.policy_net(batch.x, batch.edge_index, batch.batch,
+                                             src_t, bug_t, dst_t, seg_t)
+        value = torch.sigmoid(value.float()).cpu().tolist()
+        log_p = segment_log_softmax(move_logits.float(), seg_t, gi)
+        priors = log_p.exp().cpu().numpy()
+
+        out, cursor, gi = [], 0, 0
+        for entry in per_board:
+            if entry is None:
+                out.append((0.5, {}))
+                continue
+            moves = entry[0]
+            n = len(moves)
+            out.append((value[gi], {m: float(p) for m, p in
+                                    zip(moves, priors[cursor:cursor + n])}))
+            cursor += n
+            gi += 1
+        return out
+
+    def load_agent(self, path: str, **kwargs_network) -> None:
+        """Load an AgentNet checkpoint (value + policy) and use it for evaluation."""
+        from ai.agent_net import AgentNet
+        net = AgentNet(in_dim=13, **kwargs_network)
+        net.load_state_dict(torch.load(path, map_location=self.device, weights_only=True))
+        net.to(self.device).eval()
+        self.policy_net = net
+        self.path = path
 
     def _data_from_board(self, board: Board) -> Optional[Data]:
         """Wrap the shared numpy graph builder into a PyG Data.

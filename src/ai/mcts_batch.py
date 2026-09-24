@@ -57,6 +57,11 @@ class MCTS_BATCH(Brain):
         self.start_time = time()
         self.debug = debug
         self.hashmap: Dict[int, float] = {}
+        # Set when the oracle carries a policy head: the prior then comes from the
+        # network instead of a one-ply lookahead, so an expansion is one forward pass
+        # instead of b+1 (b averages 62 on this corpus).
+        self.use_policy = getattr(oracle, "policy_net", None) is not None
+        self.policy_cache: Dict[int, tuple] = {}
 
     # -------------------------
     #  Public API
@@ -238,17 +243,20 @@ class MCTS_BATCH(Brain):
                 flush_batch()
             return True
 
-        if self.time_limit < float("inf"):
+        if self.use_policy:
+            completed, terminal_states = self._run_policy(debug)
+        elif self.time_limit < float("inf"):
             deadline = self.start_time + self.time_limit - self.epsilon
             while time() < deadline:
                 if not collect_and_maybe_flush():
                     break
+            flush_batch()
         else:
             target = int(self.num_rollouts)
             while completed < target:
                 if not collect_and_maybe_flush():
                     break
-        flush_batch()
+            flush_batch()
 
         if debug:
             print(f"\nTerminal states {terminal_states}/{completed} rollouts")
@@ -257,6 +265,113 @@ class MCTS_BATCH(Brain):
                 print(f"Cache hits: {cache_hits}, misses: {cache_misses}, "
                       f"hit rate: {cache_hits / total * 100:.1f}%")
         self.last_rollouts = completed
+
+    # -------------------------
+    #  Policy-head search
+    # -------------------------
+    def _run_policy(self, debug=False):
+        """Batched search that asks the network once per leaf, values and prior together."""
+        completed = terminal_states = 0
+        pending = []
+        board = self.init_board
+        deadline = (self.start_time + self.time_limit - self.epsilon
+                    if self.time_limit < float("inf") else None)
+        target = int(self.num_rollouts)
+        flush_counter = 0
+
+        def flush():
+            nonlocal pending, completed, flush_counter
+            if not pending:
+                return
+            fresh = [info for info in pending if "value" not in info]
+            if fresh:
+                results = self.oracle.evaluate_positions([i["board"] for i in fresh])
+                for info, (value, prior) in zip(fresh, results):
+                    info["value"], info["prior"] = value, prior
+                    if len(self.policy_cache) < self.CACHE_LIMIT:
+                        self.policy_cache[info["leaf_hash"]] = (value, prior)
+            for info in pending:
+                path_moves = info["path_moves"]
+                for m in path_moves:
+                    board.safe_play(m)
+                node = info["node"]
+                node.expand(board, info["value"], info["prior"])
+                self._backpropagate_non_N(node, 1 - node.reward())
+                if path_moves:
+                    board.undo(len(path_moves))
+                completed += 1
+            pending = []
+            flush_counter += 1
+
+        while True:
+            if deadline is not None:
+                if time() >= deadline:
+                    break
+            elif completed >= target:
+                break
+
+            collected = self._collect_leaf_policy()
+            if collected is None:
+                break
+            if collected["terminal_immediate"]:
+                node = collected["node"]
+                self._backpropagate(node, 1 - node.reward())
+                completed += 1
+                terminal_states += 1
+                continue
+
+            self._backpropagate_N(collected["node"])
+            cached = self.policy_cache.get(collected["leaf_hash"])
+            if cached is not None:
+                collected["value"], collected["prior"] = cached
+            pending.append(collected)
+
+            threshold = 1 if flush_counter == 0 else \
+                self.batch_size // 4 if flush_counter == 1 else self.batch_size
+            if len(pending) >= threshold:
+                flush()
+        flush()
+        return completed, terminal_states
+
+    def _collect_leaf_policy(self) -> Optional[dict]:
+        """Descend to a leaf and snapshot it; the network is asked later, in a batch."""
+        curr_node = self.init_node
+        board = self.init_board
+        path_moves: List[Move] = []
+
+        while not (curr_node.is_unexplored or curr_node.is_terminal):
+            curr_node = self._uct_select(curr_node)
+            board.safe_play(curr_node.move)
+            path_moves.append(curr_node.move)
+
+        if curr_node.is_terminal:
+            if curr_node.V == -1:
+                if board.state == GameState.DRAW:
+                    v = 0.5
+                else:
+                    v = 1.0 if (
+                        (board.state == GameState.WHITE_WINS and board.current_player_color == PlayerColor.WHITE) or
+                        (board.state == GameState.BLACK_WINS and board.current_player_color == PlayerColor.BLACK)
+                    ) else 0.0
+                curr_node.V = v
+            if path_moves:
+                board.undo(len(path_moves))
+            return {"node": curr_node, "path_moves": path_moves, "terminal_immediate": True}
+
+        if curr_node.is_expanded:
+            curr_node.reset_children()
+            if path_moves:
+                board.undo(len(path_moves))
+            return {"node": curr_node, "path_moves": path_moves, "terminal_immediate": True}
+
+        # Board.copy() is cheap now that the Zobrist tables are shared, so the leaf can
+        # be snapshotted and evaluated later without replaying the path twice.
+        result = {"node": curr_node, "path_moves": path_moves,
+                  "leaf_hash": board.zobrist_key, "board": board.copy(),
+                  "terminal_immediate": False}
+        if path_moves:
+            board.undo(len(path_moves))
+        return result
 
     # -------------------------
     #  Leaf collection

@@ -41,6 +41,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
 from ai.board_graph import NUM_FEATURES, board_to_graph  # noqa: E402
+from ai.move_index import MAX_DST, index_moves  # noqa: E402
 from ai.oracle import Oracle  # noqa: E402
 from engine.board import Board  # noqa: E402
 
@@ -91,18 +92,38 @@ def rebuild_game(args):
     moves = parts[3:]
 
     xs, edges, ys, plies, played, heur = [], [], [], [], [], []
+    # Policy targets: every legal move expressed against the graph's nodes, plus which
+    # one was actually played. Cheap to record now, impossible to recover later without
+    # replaying everything again.
+    mv_src, mv_bug, mv_dst, mv_count, mv_played = [], [], [], [], []
     try:
         board = Board(parts[0] or "Base+MLP")
         for ply in range(len(moves) + 1):
             built = board_to_graph(board)
             if built is not None:
                 x, edge_index = built
+                legal = list(board.get_valid_moves())
+                _, src, bug, dst, _ = index_moves(board, legal)
+                target = -1
+                if ply < len(moves):
+                    san = moves[ply].strip()
+                    if san != "pass":
+                        chosen = board._parse_move(san)
+                        for j, candidate in enumerate(legal):
+                            if candidate == chosen:
+                                target = j
+                                break
                 xs.append(x)
                 edges.append(edge_index)
                 ys.append(_label(outcome, ply % 2 == 0))
                 plies.append(ply)
                 played.append(moves[ply] if ply < len(moves) else "")
                 heur.append(_HEURISTIC.compute_heuristic(board))
+                mv_src.append(src.astype(np.int8))
+                mv_bug.append(bug.astype(np.int8))
+                mv_dst.append(dst.astype(np.int8))
+                mv_count.append(len(legal))
+                mv_played.append(target)
             if ply < len(moves):
                 board.play(moves[ply])
     except Exception as exc:  # a handful of games in the corpus do not replay
@@ -110,7 +131,8 @@ def rebuild_game(args):
 
     if not xs:
         return ("skip", collection, game_id, "no non-empty position")
-    return ("ok", collection, game_id, xs, edges, ys, plies, played, heur, len(moves), outcome)
+    return ("ok", collection, game_id, xs, edges, ys, plies, played, heur,
+            mv_src, mv_bug, mv_dst, mv_count, mv_played, len(moves), outcome)
 
 
 class ShardWriter:
@@ -126,14 +148,22 @@ class ShardWriter:
     def _reset(self):
         self.xs, self.edges, self.ys = [], [], []
         self.game_ids, self.plies, self.moves, self.heur = [], [], [], []
+        self.mv_src, self.mv_bug, self.mv_dst = [], [], []
+        self.mv_count, self.mv_played = [], []
 
-    def add(self, game_id, xs, edges, ys, plies, played, heur):
+    def add(self, game_id, xs, edges, ys, plies, played, heur,
+            mv_src, mv_bug, mv_dst, mv_count, mv_played):
         self.xs.extend(xs)
         self.edges.extend(edges)
         self.ys.extend(ys)
         self.plies.extend(plies)
         self.moves.extend(played)
         self.heur.extend(heur)
+        self.mv_src.extend(mv_src)
+        self.mv_bug.extend(mv_bug)
+        self.mv_dst.extend(mv_dst)
+        self.mv_count.extend(mv_count)
+        self.mv_played.extend(mv_played)
         self.game_ids.extend([game_id] * len(xs))
         if len(self.ys) >= self.shard_size:
             self.flush()
@@ -147,8 +177,10 @@ class ShardWriter:
         edge_counts = np.fromiter((e.shape[1] for e in self.edges), dtype=np.int64, count=len(self.edges))
         node_ptr = np.zeros(len(self.xs) + 1, dtype=np.int64)
         edge_ptr = np.zeros(len(self.edges) + 1, dtype=np.int64)
+        move_ptr = np.zeros(len(self.mv_count) + 1, dtype=np.int64)
         np.cumsum(node_counts, out=node_ptr[1:])
         np.cumsum(edge_counts, out=edge_ptr[1:])
+        np.cumsum(np.asarray(self.mv_count, dtype=np.int64), out=move_ptr[1:])
 
         np.savez(
             os.path.join(self.out_dir, name + ".npz"),
@@ -160,6 +192,14 @@ class ShardWriter:
             game_id=np.asarray(self.game_ids, dtype=np.int32),
             ply=np.asarray(self.plies, dtype=np.int32),
             heuristic=np.asarray(self.heur, dtype=np.float32),
+            # Policy side. Node indices fit in an int8 because a hive never exceeds 28
+            # pieces; -1 means "in hand" for src and padding for dst.
+            move_ptr=move_ptr,
+            move_src=np.concatenate(self.mv_src) if self.mv_src else np.zeros(0, np.int8),
+            move_bug=np.concatenate(self.mv_bug) if self.mv_bug else np.zeros(0, np.int8),
+            move_dst=(np.concatenate(self.mv_dst) if self.mv_dst
+                      else np.zeros((0, MAX_DST), np.int8)),
+            move_played=np.asarray(self.mv_played, dtype=np.int16),
         )
         # One line per graph, same order as y: the move played at that position, empty on
         # the terminal one. Kept out of the npz because fixed-width unicode arrays waste
@@ -168,7 +208,8 @@ class ShardWriter:
             handle.write("\n".join(self.moves))
 
         self.shards.append({"name": name, "graphs": len(self.ys),
-                            "nodes": int(node_ptr[-1]), "edges": int(edge_ptr[-1])})
+                            "nodes": int(node_ptr[-1]), "edges": int(edge_ptr[-1]),
+                            "moves": int(move_ptr[-1])})
         self._reset()
 
 
@@ -225,8 +266,10 @@ def main():
                 if result is not None:
                     skipped.append({"collection": result[1], "game": result[2], "reason": result[3]})
                 continue
-            _, collection, game_id, xs, edges, ys, plies, played, heur, n_plies, outcome = result
-            writers[collection].add(game_id, xs, edges, ys, plies, played, heur)
+            (_, collection, game_id, xs, edges, ys, plies, played, heur,
+             mv_src, mv_bug, mv_dst, mv_count, mv_played, n_plies, outcome) = result
+            writers[collection].add(game_id, xs, edges, ys, plies, played, heur,
+                                    mv_src, mv_bug, mv_dst, mv_count, mv_played)
             kept += 1
             positions += len(ys)
             if (i + 1) % 2000 == 0:

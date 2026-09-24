@@ -203,6 +203,28 @@ class Graph_Net(torch.nn.Module):
             layers.append(Linear(pooled_dim, num_classes))
             self.classifier = torch.nn.Sequential(*layers)
 
+    def node_embeddings(self, x, edge_index):
+        """Per-node representations, before pooling. The policy head needs these."""
+        for i, conv in enumerate(self.convs):
+            if self.use_residual:
+                x = conv(x, edge_index)
+            else:
+                x = conv(x, edge_index)
+                x = self.norms[i](x)
+                x = F.relu(x)
+                x = self.dropouts[i](x)
+        return x
+
+    def pool(self, x, batch):
+        if self.pooling == 'mean':
+            return global_mean_pool(x, batch)
+        if self.pooling == 'max':
+            return global_max_pool(x, batch)
+        if self.pooling == 'add':
+            return global_add_pool(x, batch)
+        return torch.cat([global_mean_pool(x, batch), global_max_pool(x, batch),
+                          global_add_pool(x, batch)], dim=1)
+
     def forward(self, x, edge_index, batch):
         # Graph convolutions
         for i, conv in enumerate(self.convs):
