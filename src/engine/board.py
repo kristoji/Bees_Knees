@@ -149,8 +149,16 @@ class Board():
                 elif white_queen_surrounded:
                     self.state = GameState.BLACK_WINS
 
+                # Threefold repetition. Not in the printed rules, which only allow the
+                # players to AGREE a draw when they are forced to shuffle the same
+                # pieces (p.11); every implementation adds an automatic version so a
+                # game cannot run forever. Guarded so it can never turn a decided game
+                # into a draw: a position with a surrounded queen ends the game the
+                # first time it appears, so it cannot recur, but the order should not
+                # be what guarantees that.
                 self._draw_counter[self.zobrist_key] += 1
-                if self._draw_counter[self.zobrist_key] > 2:
+                if (self.state is GameState.IN_PROGRESS
+                        and self._draw_counter[self.zobrist_key] > 2):
                     self.state = GameState.DRAW
         else:
             raise InvalidMoveError(
