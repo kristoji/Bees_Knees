@@ -107,7 +107,11 @@ def main():
                         help="absolute index of the first game, so a job array can "
                              "split the match and still alternate colours correctly")
     parser.add_argument("--rollouts", type=int, default=100)
-    parser.add_argument("--max-plies", type=int, default=150)
+    parser.add_argument("--max-plies", type=int, default=100,
+                        help="reaching this many plies is scored as a draw. It is a "
+                             "duel convention, not a rule: the engine has no ply limit, "
+                             "and it must not gain one, because the network's features "
+                             "carry no notion of how far along the game is")
     parser.add_argument("--exploration", type=int, default=5)
     parser.add_argument("--opening-plies", type=int, default=4,
                         help="random legal plies before the engines take over; the "
@@ -154,10 +158,12 @@ def main():
 
     decided = wins + losses
     elapsed = time.perf_counter() - start
-    # Games that hit the ply cap are counted as draws: neither side converted an
-    # advantage, so scoring them either way would overstate the result.
+    # Reaching the ply cap is a draw by the duel's convention, same as a real draw.
+    # The two are still reported apart because the split says how often the cap is
+    # doing the deciding, which is what makes a result weak.
     score = (wins + 0.5 * (draws + capped)) / max(1, args.games)
-    print(f"\nGNN {wins} - {losses} heuristic, {draws} draws, {capped} hit the ply cap")
+    print(f"\nGNN {wins} - {losses} heuristic, {draws + capped} draws "
+          f"({draws} on the board, {capped} at the {args.max_plies}-ply cap)")
     print(f"score {score * 100:.1f}%  (decided games: {wins}/{decided})" if decided
           else f"score {score * 100:.1f}%  (no decided games)")
     print(f"{elapsed:.0f}s, {elapsed / max(1, args.games):.1f}s per game")

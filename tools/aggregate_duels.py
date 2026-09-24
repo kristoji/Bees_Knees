@@ -20,14 +20,13 @@ def main():
 
     games = total["games"]
     decided = total["wins"] + total["losses"]
-    # A game that hit the ply cap is a draw: neither side converted, and scoring it
-    # either way would overstate the result.
+    # Reaching the ply cap counts as a draw, by the duel's convention.
     score = (total["wins"] + 0.5 * (total["draws"] + total["capped"])) / max(1, games)
     print(f"{len(paths)} shards, {games} games at {sorted(rollouts)} rollouts per move")
     print(f"  GNN wins       {total['wins']}")
     print(f"  heuristic wins {total['losses']}")
-    print(f"  draws          {total['draws']}")
-    print(f"  hit ply cap    {total['capped']}")
+    print(f"  draws          {total['draws'] + total['capped']}"
+          f"   ({total['draws']} on the board, {total['capped']} at the ply cap)")
     print(f"  score          {score * 100:.1f}%")
     if decided:
         print(f"  among decided  {total['wins']}/{decided} = "
