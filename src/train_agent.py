@@ -198,6 +198,7 @@ def decisive_accuracy(pred, target):
 def evaluate(model, corpus, idx, batch_size, amp_dtype):
     model.eval()
     preds, pol_loss, pol_hits, pol_n, uniform = [], 0.0, 0, 0, 0.0
+    pol_hits3 = pol_hits5 = 0
     for start in range(0, len(idx), batch_size):
         chunk = idx[start:start + batch_size]
         (x, edge_index, batch_vec, _, src, bug, dst,
@@ -213,12 +214,18 @@ def evaluate(model, corpus, idx, batch_size, amp_dtype):
             # float32 explicitly: under autocast move_logits is float16, and
             # scatter_reduce requires self and src to share a dtype.
             flat = move_logits.float()
-            top = torch.full((len(chunk),), float("-inf"), device=x.device,
-                             dtype=torch.float32)
-            top = top.scatter_reduce(0, move_seg, flat, reduce="amax",
-                                     include_self=False)
-            picked = (flat[chosen] >= top[has_target] - 1e-6)
-            pol_hits += int(picked.sum())
+            # Rank of the played move: how many legal moves score strictly above it.
+            # Top-1 alone understates the prior's value to the search, which only needs
+            # the right move to be among the first few candidates.
+            per_graph = torch.full((len(chunk),), float("inf"), device=x.device,
+                                   dtype=torch.float32)
+            per_graph[has_target] = flat[chosen]
+            better = (flat > per_graph[move_seg]).to(torch.float32)
+            count = torch.zeros(len(chunk), device=x.device, dtype=torch.float32)
+            count = count.index_add(0, move_seg, better)[has_target]
+            pol_hits += int((count < 1).sum())
+            pol_hits3 += int((count < 3).sum())
+            pol_hits5 += int((count < 5).sum())
             pol_n += int(has_target.sum())
             # What picking uniformly at random among the legal moves would score.
             n_legal = (corpus.move_ptr.index_select(0, chunk + 1)
@@ -228,7 +235,8 @@ def evaluate(model, corpus, idx, batch_size, amp_dtype):
     t = corpus.y.index_select(0, idx)
     return (bce(pred, t), decisive_accuracy(pred, t),
             pol_loss / max(1, pol_n), pol_hits / max(1, pol_n),
-            uniform / max(1, pol_n))
+            uniform / max(1, pol_n),
+            pol_hits3 / max(1, pol_n), pol_hits5 / max(1, pol_n))
 
 
 # ---------------------------------------------------------------- training
@@ -342,10 +350,11 @@ def main():
             seen += len(chunk)
         scheduler.step()
 
-        val_bce, val_acc, val_pol, val_top1, val_unif = evaluate(
+        val_bce, val_acc, val_pol, val_top1, val_unif, val_t3, val_t5 = evaluate(
             model, corpus, val_idx, args.batch_size, amp_dtype)
         record = {"epoch": epoch, "train_loss": total / max(1, seen), "val_bce": val_bce,
                   "val_acc": val_acc, "val_policy_nll": val_pol, "val_top1": val_top1,
+                  "val_top3": val_t3, "val_top5": val_t5,
                   "lr": scheduler.get_last_lr()[0], "seconds": time.perf_counter() - t0}
         log.write(json.dumps(record) + "\n")
         log.flush()
@@ -360,7 +369,7 @@ def main():
             marker = "  <- best"
         print(f"epoch {epoch:3d}  train {record['train_loss']:.4f}  "
               f"val {val_bce:.4f} acc {val_acc:.3f}  "
-              f"policy {val_pol:.4f} top1 {val_top1:.3f} (caso {val_unif:.3f})  "
+              f"policy {val_pol:.4f} top1/3/5 {val_top1:.3f}/{val_t3:.3f}/{val_t5:.3f}  "
               f"{record['seconds']:.1f}s{marker}", flush=True)
 
         if epoch - best["epoch"] >= args.patience:
@@ -371,7 +380,7 @@ def main():
     model.load_state_dict(torch.load(os.path.join(args.out, "best.pt"),
                                      map_location=device, weights_only=True))
     test_idx = splits["test"].to(device)
-    test_bce, test_acc, test_pol, test_top1, test_unif = evaluate(
+    test_bce, test_acc, test_pol, test_top1, test_unif, test_t3, test_t5 = evaluate(
         model, corpus, test_idx, args.batch_size, amp_dtype)
     test_target = corpus.y.index_select(0, test_idx)
     test_heur = corpus.heuristic.to(test_target.device).index_select(0, test_idx)
@@ -382,6 +391,7 @@ def main():
         "val_top1": best.get("top1"),
         "test_bce": test_bce, "test_acc": test_acc,
         "test_policy_nll": test_pol, "test_top1": test_top1,
+        "test_top3": test_t3, "test_top5": test_t5,
         "test_top1_uniform": test_unif,
         "test_bce_heuristic": bce(test_heur, test_target),
         "test_acc_heuristic": decisive_accuracy(test_heur, test_target),
@@ -393,9 +403,9 @@ def main():
 
     print(f"\nbest epoch {best['epoch']}")
     print(f"test  value     BCE {test_bce:.4f}  acc {test_acc:.3f}")
-    print(f"test  policy    NLL {test_pol:.4f}  top1 {test_top1:.3f}   "
-          f"vs {test_unif:.3f} scegliendo a caso fra le mosse legali "
-          f"({test_top1 / max(1e-9, test_unif):.0f}x)")
+    print(f"test  policy    NLL {test_pol:.4f}  "
+          f"top1 {test_top1:.3f}  top3 {test_t3:.3f}  top5 {test_t5:.3f}   "
+          f"(caso: top1 {test_unif:.3f}, {test_top1 / max(1e-9, test_unif):.0f}x)")
     print(f"test  heuristic BCE {summary['test_bce_heuristic']:.4f}  "
           f"acc {summary['test_acc_heuristic']:.3f}")
     print("the network is only useful to the search if it beats the heuristic here")
