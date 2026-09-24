@@ -49,15 +49,30 @@ class HeuristicOracle:
 
 
 def load_gnn(weights, summary_path, device):
+    """Load either kind of checkpoint, picking the search path that matches.
+
+    A checkpoint with policy.* keys is an AgentNet: the search then gets its prior from
+    the head, one forward pass per expansion. A value-only checkpoint keeps the old
+    path, which evaluates every child.
+    """
+    import torch
+
     cfg = json.load(open(summary_path))["args"]
-    oracle = OracleGNN(
-        device=device, hidden_dim=cfg["hidden_dim"], conv_type=cfg["conv_type"],
+    kwargs = dict(
+        hidden_dim=cfg["hidden_dim"], conv_type=cfg["conv_type"],
         num_layers=cfg["num_layers"], gat_heads=cfg["gat_heads"],
         conv_dropout=cfg["dropout"], mlp_dropout=cfg["dropout"],
         final_dropout=cfg["dropout"], use_layer_norm=True, use_residual=False,
         pooling=cfg["pooling"], mlp_layers=2, final_mlp_layers=2,
     )
-    oracle.load(weights)
+    oracle = OracleGNN(device=device, **kwargs)
+    state = torch.load(weights, map_location="cpu", weights_only=True)
+    has_policy = any(k.startswith("policy.") for k in state)
+    if has_policy:
+        oracle.load_agent(weights, **kwargs)
+    else:
+        oracle.load(weights)
+    cfg["policy_head"] = has_policy
     return oracle, cfg
 
 
@@ -125,7 +140,7 @@ def main():
     gnn, cfg = load_gnn(args.weights, args.summary, args.device)
     heuristic = HeuristicOracle()
     print(f"GNN: {cfg['conv_type']} x{cfg['num_layers']}, hidden {cfg['hidden_dim']}, "
-          f"from {args.weights}")
+          f"{'policy head' if cfg.get('policy_head') else 'value only'}, from {args.weights}")
     print(f"{args.games} games, {args.rollouts} rollouts per move, "
           f"{args.opening_plies} random opening plies, colours alternate")
     print("games are paired: each opening is played from both sides\n")
