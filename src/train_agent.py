@@ -210,14 +210,14 @@ def evaluate(model, corpus, idx, batch_size, amp_dtype):
             chosen = target[has_target]
             pol_loss += float(-log_p[chosen].sum())
             # top-1: is the played move the highest scoring legal move?
-            best = torch.full((len(chunk),), -1, dtype=torch.long, device=x.device)
-            best = best.scatter_reduce(
-                0, move_seg, torch.arange(len(move_logits), device=x.device),
-                reduce="amax", include_self=False)
-            top = torch.zeros(len(chunk), device=x.device, dtype=move_logits.dtype)
-            top = top.scatter_reduce(0, move_seg, move_logits.float(), reduce="amax",
+            # float32 explicitly: under autocast move_logits is float16, and
+            # scatter_reduce requires self and src to share a dtype.
+            flat = move_logits.float()
+            top = torch.full((len(chunk),), float("-inf"), device=x.device,
+                             dtype=torch.float32)
+            top = top.scatter_reduce(0, move_seg, flat, reduce="amax",
                                      include_self=False)
-            picked = (move_logits.float()[chosen] >= top[has_target] - 1e-6)
+            picked = (flat[chosen] >= top[has_target] - 1e-6)
             pol_hits += int(picked.sum())
             pol_n += int(has_target.sum())
             # What picking uniformly at random among the legal moves would score.
