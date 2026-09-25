@@ -62,7 +62,7 @@ def load_gnn(weights, summary_path, device):
         hidden_dim=cfg["hidden_dim"], conv_type=cfg["conv_type"],
         num_layers=cfg["num_layers"], gat_heads=cfg["gat_heads"],
         conv_dropout=cfg["dropout"], mlp_dropout=cfg["dropout"],
-        final_dropout=cfg["dropout"], use_layer_norm=True, use_residual=False,
+        final_dropout=cfg["dropout"], use_layer_norm=True, use_residual=cfg.get("residual", False),
         pooling=cfg["pooling"], mlp_layers=2, final_mlp_layers=2,
     )
     oracle = OracleGNN(device=device, **kwargs)
