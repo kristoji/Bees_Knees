@@ -35,8 +35,8 @@ from engine.enums import GameState, PlayerColor  # noqa: E402
 OK = "ok"
 
 
-def start_engine(path):
-    proc = subprocess.Popen([path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+def start_engine(path, extra_args=()):
+    proc = subprocess.Popen([path, *extra_args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, bufsize=1, universal_newlines=True)
     # A UHP engine greets with its id and capabilities followed by "ok". Leaving that
     # unread shifts every later reply by one command.
@@ -69,7 +69,13 @@ def send(proc, command):
 
 
 def as_clock(seconds):
-    return f"{int(seconds) // 3600:02d}:{int(seconds) % 3600 // 60:02d}:{seconds % 60:05.2f}"
+    """UHP wants hh:mm:ss with whole seconds.
+
+    Mzinga tolerates a fractional field, nokamute rejects it outright, so the budget
+    handed to an external engine is always rounded to whole seconds.
+    """
+    total = max(1, int(round(seconds)))
+    return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
 
 
 def load_agent(weights, summary_path, device):
@@ -146,6 +152,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--engine", required=True, help="path to the UHP engine binary")
+    parser.add_argument("--engine-args", nargs="*", default=[],
+                        help="arguments the engine needs to speak UHP; nokamute wants "
+                             "'uhp', Mzinga wants nothing")
     parser.add_argument("--weights", required=True)
     parser.add_argument("--summary", required=True)
     parser.add_argument("--games", type=int, default=10)
@@ -163,10 +172,14 @@ def main():
     args = parser.parse_args()
 
     oracle, cfg = load_agent(args.weights, args.summary, args.device)
-    proc, ident = start_engine(args.engine)
+    proc, ident = start_engine(args.engine, args.engine_args)
     print(f"opponent : {' / '.join(ident)}")
     print(f"agent    : {cfg['conv_type']} x{cfg['num_layers']}, hidden {cfg['hidden_dim']}, "
           f"{'policy head' if cfg.get('policy_head') else 'value only'}")
+    engine_seconds = max(1, int(round(args.move_time)))
+    if abs(engine_seconds - args.move_time) > 1e-6:
+        print(f"note     : the engine's budget is rounded to {engine_seconds}s "
+              f"(UHP takes whole seconds); the agent keeps {args.move_time}s")
     print(f"control  : {args.move_time}s per move for both sides, "
           f"{args.max_plies}-ply cap, colours alternate\n")
 
