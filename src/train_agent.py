@@ -252,6 +252,10 @@ def main():
     parser.add_argument("--conv-type", default="GIN", choices=["GIN", "GAT", "GCN"])
     parser.add_argument("--gat-heads", type=int, default=4)
     parser.add_argument("--pooling", default="add", choices=["mean", "max", "add", "concat"])
+    parser.add_argument("--residual", action="store_true",
+                        help="residual connections between conv layers. Off by default "
+                             "to match earlier runs; worth turning on past ~4 layers, "
+                             "where plain message passing starts to over-smooth")
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
@@ -308,12 +312,12 @@ def main():
         in_dim=corpus.num_features, hidden_dim=args.hidden_dim,
         conv_type=args.conv_type, num_layers=args.num_layers, gat_heads=args.gat_heads,
         conv_dropout=args.dropout, mlp_dropout=args.dropout, final_dropout=args.dropout,
-        use_layer_norm=True, use_residual=False, pooling=args.pooling,
+        use_layer_norm=True, use_residual=args.residual, pooling=args.pooling,
         mlp_layers=2, final_mlp_layers=2,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"model: {args.conv_type} x{args.num_layers}, hidden {args.hidden_dim}, "
-          f"{n_params / 1e6:.2f}M parameters")
+          f"{'residual' if args.residual else 'plain'}, {n_params / 1e6:.2f}M parameters")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,
                                   weight_decay=args.weight_decay)
