@@ -132,7 +132,20 @@ def play_game(oracle, proc, agent_is_white, move_time, max_plies, exploration,
             move = agent.calculate_best_move(board, restriction="time", value=move_time)
             rollouts.append(agent.last_rollouts)
             board.play(move)
-            send(proc, f"play {move}")
+            try:
+                send(proc, f"play {move}")
+            except RuntimeError as exc:
+                # The two engines disagree about the position. Capture both views and
+                # abandon this game rather than killing the whole match: with the
+                # engine's own board unreadable from here, there is nothing to salvage.
+                theirs = "unreadable"
+                try:
+                    theirs = send(proc, "validmoves")[0][:90]
+                except Exception:
+                    pass
+                return "desync", board.turn, rollouts, {
+                    "move": move, "error": str(exc),
+                    "ours": str(board)[:160], "theirs_validmoves": theirs}
         else:
             reply = send(proc, f"bestmove time {as_clock(move_time)}")
             move = reply[0].strip()
@@ -144,8 +157,8 @@ def play_game(oracle, proc, agent_is_white, move_time, max_plies, exploration,
         if verbose:
             print(f"      {'agent' if our_turn else 'engine'}: {move}")
         if board.state is not GameState.IN_PROGRESS:
-            return board.state, board.turn, rollouts
-    return None, board.turn, rollouts
+            return board.state, board.turn, rollouts, None
+    return None, board.turn, rollouts, None
 
 
 def main():
@@ -184,15 +197,22 @@ def main():
           f"{args.max_plies}-ply cap, colours alternate\n")
 
     wins = losses = draws = capped = 0
+    desyncs = []
     all_rollouts = []
     start = time.perf_counter()
     try:
         for game in range(args.start_game, args.start_game + args.games):
             agent_is_white = game % 2 == 0
-            state, plies, rollouts = play_game(
+            state, plies, rollouts, problem = play_game(
                 oracle, proc, agent_is_white, args.move_time, args.max_plies,
                 args.exploration, args.opening_plies, args.seed + game // 2, args.verbose)
             all_rollouts += rollouts
+            if state == "desync":
+                desyncs.append({"game": game, "plies": plies, **problem})
+                print(f"  game {game:3d}  agent as {'White' if agent_is_white else 'Black'}  "
+                      f"{plies:3d} plies  DESYNC on {problem['move']!r}: "
+                      f"{problem['error'].split(': ')[-1]}", flush=True)
+                continue
             if state is None:
                 capped += 1
                 result = "cap"
@@ -213,7 +233,7 @@ def main():
             pass
         proc.kill()
 
-    total = args.games
+    total = args.games - len(desyncs)
     score = (wins + 0.5 * (draws + capped)) / max(1, total)
     elapsed = time.perf_counter() - start
     mean_rollouts = sum(all_rollouts) / max(1, len(all_rollouts))
@@ -222,11 +242,19 @@ def main():
     print(f"score {score * 100:.1f}%   agent averaged {mean_rollouts:.0f} rollouts "
           f"per move in {args.move_time}s")
     print(f"{elapsed:.0f}s, {elapsed / max(1, total):.0f}s per game")
+    if desyncs:
+        print(f"\n{len(desyncs)} game(s) abandoned because the engines disagreed:")
+        for d in desyncs[:3]:
+            print(f"  game {d['game']} at ply {d['plies']}, our move {d['move']!r}")
+            print(f"    error : {d['error'].split(': ')[-1]}")
+            print(f"    ours  : {d['ours']}")
+            print(f"    theirs: {d['theirs_validmoves']}")
 
     if args.out:
         json.dump({"wins": wins, "losses": losses, "draws": draws, "capped": capped,
                    "score": score, "games": total, "move_time": args.move_time,
                    "mean_rollouts": mean_rollouts, "opponent": ident,
+                   "desyncs": desyncs,
                    "weights": args.weights, "seconds": elapsed},
                   open(args.out, "w"), indent=2)
 
