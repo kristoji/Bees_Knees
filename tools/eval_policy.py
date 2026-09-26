@@ -77,6 +77,13 @@ def main():
     parser.add_argument("--weights", required=True)
     parser.add_argument("--summary", required=True)
     parser.add_argument("--split", default="val", choices=["train", "val", "test"])
+    parser.add_argument("--heldout-also", default=None,
+                        help="another shard directory. Restricts the evaluation to games "
+                             "held out in BOTH corpora. split_by_game permutes by index, "
+                             "so a corpus that grew produces a different split, and a "
+                             "model trained on the larger one has seen much of the "
+                             "smaller one's test games. This is what makes two models "
+                             "trained on different corpora comparable")
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
@@ -91,6 +98,27 @@ def main():
     corpus = Corpus(args.shards, cfg.get("collections"), device)
     splits = split_by_game(corpus.game_key, cfg["seed"])
     idx = splits[args.split].to(device)
+
+    if args.heldout_also:
+        # Game keys are collection id * 10M + game id, and are comparable across the two
+        # corpora only while the shared collections keep their ids. Check rather than
+        # assume: a new collection sorting before an old one would silently renumber it.
+        other = Corpus(args.heldout_also, cfg.get("collections"), "cpu")
+        shared = set(corpus.collections) & set(other.collections)
+        for name in sorted(shared):
+            if corpus.collections.index(name) != other.collections.index(name):
+                raise SystemExit(
+                    f"collection {name!r} has id {corpus.collections.index(name)} in one "
+                    f"corpus and {other.collections.index(name)} in the other, so the "
+                    f"game keys do not refer to the same games")
+        other_splits = split_by_game(other.game_key, cfg["seed"])
+        other_keys = torch.unique(
+            other.game_key.index_select(0, other_splits[args.split]))
+        keep = torch.isin(corpus.game_key.index_select(0, idx), other_keys.to(device))
+        n_games = len(torch.unique(corpus.game_key.index_select(0, idx)))
+        idx = idx[torch.nonzero(keep, as_tuple=True)[0]]
+        print(f"held out in both: {len(torch.unique(corpus.game_key.index_select(0, idx)))}"
+              f" of {n_games} games, {len(idx)} positions")
 
     model = AgentNet(
         in_dim=corpus.num_features, hidden_dim=cfg["hidden_dim"],
