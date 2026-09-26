@@ -114,10 +114,13 @@ def main():
         other_splits = split_by_game(other.game_key, cfg["seed"])
         other_keys = torch.unique(
             other.game_key.index_select(0, other_splits[args.split]))
-        keep = torch.isin(corpus.game_key.index_select(0, idx), other_keys.to(device))
-        n_games = len(torch.unique(corpus.game_key.index_select(0, idx)))
-        idx = idx[torch.nonzero(keep, as_tuple=True)[0]]
-        print(f"held out in both: {len(torch.unique(corpus.game_key.index_select(0, idx)))}"
+        # corpus.game_key stays on the CPU even when the tensors do not, so index it
+        # with a CPU copy and move the mask, not the keys.
+        mine = corpus.game_key.index_select(0, idx.cpu())
+        keep = torch.isin(mine, other_keys)
+        n_games = len(torch.unique(mine))
+        idx = idx[torch.nonzero(keep.to(idx.device), as_tuple=True)[0]]
+        print(f"held out in both: {len(torch.unique(corpus.game_key.index_select(0, idx.cpu())))}"
               f" of {n_games} games, {len(idx)} positions")
 
     model = AgentNet(
