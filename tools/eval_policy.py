@@ -38,7 +38,23 @@ def policy_ranks(model, corpus, idx, batch_size, amp_dtype):
         if not has_target.any():
             continue
         flat = move_logits.float()
-        chosen = target[has_target]
+        # Corpus.batch hands back a per-MOVE distribution, not a per-graph index: the
+        # policy target became soft when self-play started writing visit counts. The
+        # move to rank is that distribution's argmax within each graph, which is the
+        # played move for supervised shards (one-hot) and the most-visited one for
+        # self-play shards. Ties resolve to the lowest flat index so the rank is
+        # reproducible.
+        n_moves = len(target)
+        seg_max = torch.full((len(chunk),), -1.0, device=x.device, dtype=target.dtype)
+        seg_max = seg_max.scatter_reduce(0, move_seg, target, reduce="amax",
+                                         include_self=True)
+        positions = torch.arange(n_moves, device=x.device)
+        at_max = torch.where(target >= seg_max[move_seg], positions,
+                             torch.full_like(positions, n_moves))
+        argmax = torch.full((len(chunk),), n_moves, device=x.device, dtype=torch.long)
+        argmax = argmax.scatter_reduce(0, move_seg, at_max, reduce="amin",
+                                       include_self=True)
+        chosen = argmax[has_target]
         # How many legal moves the head scores strictly above the played one.
         # flat[chosen] has one entry per graph WITH a target, while move_seg indexes
         # every graph in the chunk, so scatter it into a full-length vector first.
