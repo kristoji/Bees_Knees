@@ -49,6 +49,7 @@ class Corpus:
     def __init__(self, shard_dir, collections=None, device="cpu", limit_games=0):
         xs, edges, ys, heur, game_keys, node_counts, edge_counts = [], [], [], [], [], [], []
         m_src, m_bug, m_dst, m_played, move_counts = [], [], [], [], []
+        m_pi = []
         collection_ids = {}
         for path in sorted(glob.glob(os.path.join(shard_dir, "*.npz"))):
             collection = os.path.basename(path)[:-4].rsplit(".", 1)[0]
@@ -67,6 +68,18 @@ class Corpus:
             m_bug.append(data["move_bug"])
             m_dst.append(data["move_dst"])
             m_played.append(data["move_played"])
+            n_moves = len(data["move_src"])
+            if "move_pi" in data.files:
+                m_pi.append(data["move_pi"].astype(np.float32))
+            else:
+                # Supervised shards name one played move; turn it into the same
+                # per-move distribution the self-play shards carry, so the loss has a
+                # single form.
+                pi = np.zeros(n_moves, dtype=np.float32)
+                ptr, played = data["move_ptr"], data["move_played"]
+                hit = played >= 0
+                pi[ptr[:-1][hit] + played[hit]] = 1.0
+                m_pi.append(pi)
             # Game ids restart per collection, so key on the pair.
             game_keys.append(data["game_id"].astype(np.int64) + cid * 10_000_000)
         if not xs:
@@ -110,6 +123,7 @@ class Corpus:
         self.move_dst = torch.from_numpy(np.concatenate(m_dst).astype(np.int64)).to(self.device)
         self.move_played = torch.from_numpy(
             np.concatenate(m_played).astype(np.int64)).to(self.device)
+        self.move_pi = torch.from_numpy(np.concatenate(m_pi)).to(self.device)
 
     def __len__(self):
         return len(self.y)
@@ -135,11 +149,13 @@ class Corpus:
         dst = torch.where(dst >= 0, dst + offset.unsqueeze(-1), dst)
         bug = self.move_bug.index_select(0, move_pos)
 
-        played = self.move_played.index_select(0, idx)
-        has_target = played >= 0
-        target = new_move_ptr[:-1] + played.clamp(min=0)
+        target_pi = self.move_pi.index_select(0, move_pos)
+        # A position has a usable policy target when its distribution carries any mass.
+        mass = torch.zeros(len(idx), device=idx.device, dtype=target_pi.dtype)
+        mass = mass.index_add(0, move_seg, target_pi)
+        has_target = mass > 0
         return (x, edge_index, node_seg, self.y.index_select(0, idx),
-                src, bug, dst, move_seg, target, has_target)
+                src, bug, dst, move_seg, target_pi, has_target)
 
 
 def _gather(ptr, idx):
@@ -202,24 +218,34 @@ def evaluate(model, corpus, idx, batch_size, amp_dtype):
     for start in range(0, len(idx), batch_size):
         chunk = idx[start:start + batch_size]
         (x, edge_index, batch_vec, _, src, bug, dst,
-         move_seg, target, has_target) = corpus.batch(chunk)
+         move_seg, target_pi, has_target) = corpus.batch(chunk)
         with torch.autocast(corpus.device.type, dtype=amp_dtype, enabled=amp_dtype is not None):
             value, move_logits = model(x, edge_index, batch_vec, src, bug, dst, move_seg)
         preds.append(torch.sigmoid(value.float()))
         if has_target.any():
             log_p = segment_log_softmax(move_logits.float(), move_seg, len(chunk))
-            chosen = target[has_target]
-            pol_loss += float(-log_p[chosen].sum())
-            # top-1: is the played move the highest scoring legal move?
+            nll = torch.zeros(len(chunk), device=x.device, dtype=log_p.dtype)
+            nll = nll.index_add(0, move_seg, -target_pi * log_p)
+            pol_loss += float(nll[has_target].sum())
+            # "The" target move is the one the distribution favours most.
+            best_pi = torch.full((len(chunk),), -1.0, device=x.device, dtype=target_pi.dtype)
+            best_pi = best_pi.scatter_reduce(0, move_seg, target_pi, reduce="amax",
+                                             include_self=False)
+            is_best = target_pi >= best_pi[move_seg] - 1e-9
+            chosen = torch.zeros(len(chunk), dtype=torch.long, device=x.device)
+            chosen = chosen.scatter(0, move_seg[is_best],
+                                    torch.arange(len(target_pi), device=x.device)[is_best])
+            # Rank of the target move: how many legal moves the head scores strictly
+            # above it. Top-1 alone understates the prior's value to the search, which
+            # only needs the right move among the first few candidates.
             # float32 explicitly: under autocast move_logits is float16, and
             # scatter_reduce requires self and src to share a dtype.
             flat = move_logits.float()
-            # Rank of the played move: how many legal moves score strictly above it.
-            # Top-1 alone understates the prior's value to the search, which only needs
-            # the right move to be among the first few candidates.
             per_graph = torch.full((len(chunk),), float("inf"), device=x.device,
                                    dtype=torch.float32)
-            per_graph[has_target] = flat[chosen]
+            # chosen holds one move index per graph, so select the ones that
+            # actually have a target before writing them in.
+            per_graph[has_target] = flat[chosen[has_target]]
             better = (flat > per_graph[move_seg]).to(torch.float32)
             count = torch.zeros(len(chunk), device=x.device, dtype=torch.float32)
             count = count.index_add(0, move_seg, better)[has_target]
@@ -338,13 +364,20 @@ def main():
         for start in range(0, len(perm), args.batch_size):
             chunk = train_idx.index_select(0, perm[start:start + args.batch_size])
             (x, edge_index, batch_vec, target, src, bug, dst,
-             move_seg, move_target, has_target) = corpus.batch(chunk)
+             move_seg, target_pi, has_target) = corpus.batch(chunk)
             with torch.autocast(device.type, dtype=amp_dtype, enabled=amp_dtype is not None):
                 value, move_logits = model(x, edge_index, batch_vec, src, bug, dst, move_seg)
                 loss = F.binary_cross_entropy_with_logits(value.float(), target)
                 if has_target.any():
                     log_p = segment_log_softmax(move_logits.float(), move_seg, len(chunk))
-                    policy_loss = -log_p[move_target[has_target]].mean()
+                    # Soft cross entropy: -sum_a pi(a) log p(a), per position. With a
+                    # one-hot target this is the old indexed form; with the visit
+                    # distribution from self-play it is what lets the head learn the
+                    # search's preferences rather than a single move.
+                    per_move = -target_pi * log_p
+                    per_pos = torch.zeros(len(chunk), device=x.device, dtype=per_move.dtype)
+                    per_pos = per_pos.index_add(0, move_seg, per_move)
+                    policy_loss = per_pos[has_target].mean()
                     loss = loss + args.policy_weight * policy_loss
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()

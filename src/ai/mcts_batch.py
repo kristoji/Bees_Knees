@@ -43,7 +43,8 @@ class MCTS_BATCH(Brain):
 
     def __init__(self, oracle: "OracleGNN", exploration_weight: int = 10, num_rollouts: int = 1024,
                  time_limit: float = float("inf"), batch_size: int = 32,
-                 debug: bool = False) -> None:
+                 dirichlet_eps: float = 0.0, dirichlet_alpha: float = 0.3,
+                 temperature_plies: int = 0, debug: bool = False) -> None:
         super().__init__()
         self.init_node: Optional[Node_mcts] = None
         self.init_board: Optional[Board] = None
@@ -62,6 +63,14 @@ class MCTS_BATCH(Brain):
         # instead of b+1 (b averages 62 on this corpus).
         self.use_policy = getattr(oracle, "policy_net", None) is not None
         self.policy_cache: Dict[int, tuple] = {}
+        # Self-play needs the search to be stochastic. Without these the tree is a pure
+        # argmax end to end — no sampling in selection, no noise at the root, and the
+        # move played is the argmax of the visit counts — so a generator would produce
+        # the same game over and over. Both default to off so match play is unchanged.
+        self.dirichlet_eps = dirichlet_eps       # AlphaZero uses 0.25
+        self.dirichlet_alpha = dirichlet_alpha   # roughly 10 / branching factor
+        self.temperature_plies = temperature_plies
+        self._noise_applied = False
 
     # -------------------------
     #  Public API
@@ -90,9 +99,27 @@ class MCTS_BATCH(Brain):
             raise Error("Invalid restriction for MCTS")
 
     def action_selection(self, training: bool = False, debug: bool = False) -> str:
+        # NOTE: this descends init_node into the chosen child, which is what makes the
+        # tree reusable next move. Anything that wants the root's statistics, such as
+        # get_moves_probs() for a self-play policy target, must read them first.
         node = self.choose(training=training, debug=debug)
         self.init_node = node
         return self.init_board.stringify_move(node.move)
+
+    def _apply_root_noise(self) -> None:
+        """Mix Dirichlet noise into the root's priors, once per search.
+
+        Applied after the root is expanded, which only happens inside the search, so
+        it cannot be done up front.
+        """
+        children = self.init_node.children
+        if not children or self.dirichlet_eps <= 0 or self._noise_applied:
+            return
+        noise = np.random.dirichlet([self.dirichlet_alpha] * len(children))
+        eps = self.dirichlet_eps
+        for child, n in zip(children, noise):
+            child.P = (1 - eps) * child.P + eps * float(n)
+        self._noise_applied = True
 
     def choose(self, training: bool, debug: bool = False) -> Node_mcts:
         if debug:
@@ -101,9 +128,23 @@ class MCTS_BATCH(Brain):
                 print(f"Move: {self.init_board.stringify_move(child.move)} -> "
                       f"N = {child.N}, W = {child.W}, Q = {child.Q}, P = {child.P}, V = {child.V}",
                       flush=True)
-        return max(self.init_node.children, key=lambda n: n.N)
+        children = self.init_node.children
+        # Early in a self-play game, sample proportionally to the visit counts instead
+        # of taking the argmax, so openings vary. Later moves stay greedy.
+        if self.temperature_plies and self.init_board.turn < self.temperature_plies:
+            counts = np.array([c.N for c in children], dtype=np.float64)
+            if counts.sum() > 0:
+                probs = counts / counts.sum()
+                return children[int(np.random.choice(len(children), p=probs))]
+        return max(children, key=lambda n: n.N)
 
     def get_moves_probs(self) -> Dict[Move, float]:
+        """Visit distribution at the root: the policy target for self-play.
+
+        This is the improvement the search adds on top of the raw policy head, and
+        training toward it is what lets the network exceed the player that produced
+        the data.
+        """
         total = max(1, sum(child.N for child in self.init_node.children))
         return {child.move: child.N / total for child in self.init_node.children}
 
@@ -132,6 +173,7 @@ class MCTS_BATCH(Brain):
 
         if len(self.hashmap) > self.CACHE_LIMIT:
             self.hashmap.clear()
+        self._noise_applied = False
 
         terminal_states = 0
         completed = 0
@@ -300,6 +342,7 @@ class MCTS_BATCH(Brain):
                 if path_moves:
                     board.undo(len(path_moves))
                 completed += 1
+            self._apply_root_noise()
             pending = []
             flush_counter += 1
 
