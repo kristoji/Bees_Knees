@@ -39,6 +39,7 @@ import torch.nn.functional as F
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ai.agent_net import AgentNet, segment_log_softmax  # noqa: E402
+from split import split_by_game  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------- data
@@ -180,18 +181,6 @@ def _subset(x, edge_index, node_ptr, edge_ptr, keep):
     return np.concatenate(xs), np.concatenate(es, axis=1), new_node, new_edge
 
 
-def split_by_game(game_key, seed, val_frac=0.1, test_frac=0.1):
-    """Partition positions so that no game appears in more than one split."""
-    games = torch.unique(game_key)
-    order = torch.randperm(len(games), generator=torch.Generator().manual_seed(seed))
-    games = games[order]
-    n_val = max(1, int(len(games) * val_frac))
-    n_test = max(1, int(len(games) * test_frac))
-    groups = {"test": games[:n_test],
-              "val": games[n_test:n_test + n_val],
-              "train": games[n_test + n_val:]}
-    return {name: torch.nonzero(torch.isin(game_key, g), as_tuple=True)[0]
-            for name, g in groups.items()}
 
 
 # ---------------------------------------------------------------- metrics
