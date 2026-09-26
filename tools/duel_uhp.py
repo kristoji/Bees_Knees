@@ -56,15 +56,23 @@ def send(proc, command):
     proc.stdin.write(command + "\n")
     proc.stdin.flush()
     lines = []
+    error = None
     while True:
         line = proc.stdout.readline()
         if not line:
             raise RuntimeError(f"the engine died on: {command}")
         line = line.strip()
         if line == OK:
+            # A rejected command is still terminated by "ok". Raising on the error line
+            # without draining to it leaves that "ok" in the pipe, and every later reply
+            # comes back shifted by one command — which is how a recovered desync went
+            # on to crash the next game with a gamestring where a move belonged.
+            if error is not None:
+                raise RuntimeError(f"engine rejected '{command}': {error}")
             return lines
         if line.startswith("err") or line.startswith("invalidmove"):
-            raise RuntimeError(f"engine rejected '{command}': {line}")
+            error = line
+            continue
         lines.append(line)
 
 
