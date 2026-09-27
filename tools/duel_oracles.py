@@ -1,4 +1,4 @@
-"""Play the trained network against the hand-written heuristic, same search, same budget.
+"""Play a trained network against the heuristic or another network, same search budget.
 
 Validation loss says how well the network predicts the outcome of positions drawn from
 the training distribution. It does not say whether the tree plays better, which is the
@@ -7,6 +7,11 @@ driven by ai.oracle.Oracle, at an identical rollout count, alternating colours.
 
 The heuristic is wrapped in an adapter that exposes the two methods MCTS_BATCH calls, so
 both sides run the *same* searcher and only the value function differs.
+
+Pass --weights-b/--summary-b to face a second checkpoint instead of the heuristic.
+That is the measurement that settles which of two models is stronger: top-1 against
+recorded human moves says how well a model imitates the corpus, and a model trained on
+stronger games can imitate it less well while playing better.
 
     python tools/duel_oracles.py --weights models/best.pt --summary models/summary.json \
         --games 20 --rollouts 100
@@ -134,13 +139,30 @@ def main():
                              "differ from each other")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=20260923)
+    parser.add_argument("--weights-b", default=None,
+                        help="a second checkpoint to play against instead of the "
+                             "heuristic. Top-1 on recorded human moves does not measure "
+                             "playing strength, so two models that differ there have to "
+                             "be settled over the board")
+    parser.add_argument("--summary-b", default=None)
     parser.add_argument("--out", default=None, help="write the result as JSON here")
     args = parser.parse_args()
 
+    if bool(args.weights_b) != bool(args.summary_b):
+        raise SystemExit("--weights-b and --summary-b go together")
+
     gnn, cfg = load_gnn(args.weights, args.summary, args.device)
-    heuristic = HeuristicOracle()
-    print(f"GNN: {cfg['conv_type']} x{cfg['num_layers']}, hidden {cfg['hidden_dim']}, "
+    print(f"A: {cfg['conv_type']} x{cfg['num_layers']}, hidden {cfg['hidden_dim']}, "
           f"{'policy head' if cfg.get('policy_head') else 'value only'}, from {args.weights}")
+    if args.weights_b:
+        opponent, cfg_b = load_gnn(args.weights_b, args.summary_b, args.device)
+        opponent_name = "B"
+        print(f"B: {cfg_b['conv_type']} x{cfg_b['num_layers']}, hidden "
+              f"{cfg_b['hidden_dim']}, "
+              f"{'policy head' if cfg_b.get('policy_head') else 'value only'}, "
+              f"from {args.weights_b}")
+    else:
+        opponent, opponent_name = HeuristicOracle(), "heuristic"
     print(f"{args.games} games, {args.rollouts} rollouts per move, "
           f"{args.opening_plies} random opening plies, colours alternate")
     print("games are paired: each opening is played from both sides\n")
@@ -153,8 +175,8 @@ def main():
         # out. The absolute index keeps every shard of an array reproducible.
         gnn_is_white = game % 2 == 0
         opening_seed = args.seed + game // 2
-        white = gnn if gnn_is_white else heuristic
-        black = heuristic if gnn_is_white else gnn
+        white = gnn if gnn_is_white else opponent
+        black = opponent if gnn_is_white else gnn
         state, plies = play_game(white, black, args.rollouts, args.max_plies,
                                  args.exploration, args.opening_plies, opening_seed)
         if state is None:
@@ -167,8 +189,8 @@ def main():
             gnn_won = ((state is GameState.WHITE_WINS) == gnn_is_white)
             wins += gnn_won
             losses += not gnn_won
-            result = "GNN wins" if gnn_won else "heuristic wins"
-        print(f"  game {game:3d}  GNN as {'White' if gnn_is_white else 'Black'}  "
+            result = "A wins" if gnn_won else f"{opponent_name} wins"
+        print(f"  game {game:3d}  A as {'White' if gnn_is_white else 'Black'}  "
               f"{plies:3d} plies  {result}", flush=True)
 
     decided = wins + losses
@@ -177,7 +199,7 @@ def main():
     # The two are still reported apart because the split says how often the cap is
     # doing the deciding, which is what makes a result weak.
     score = (wins + 0.5 * (draws + capped)) / max(1, args.games)
-    print(f"\nGNN {wins} - {losses} heuristic, {draws + capped} draws "
+    print(f"\nA {wins} - {losses} {opponent_name}, {draws + capped} draws "
           f"({draws} on the board, {capped} at the {args.max_plies}-ply cap)")
     print(f"score {score * 100:.1f}%  (decided games: {wins}/{decided})" if decided
           else f"score {score * 100:.1f}%  (no decided games)")
@@ -187,7 +209,7 @@ def main():
         json.dump({"wins": wins, "losses": losses, "draws": draws, "capped": capped,
                    "score": score, "games": args.games, "start_game": args.start_game,
                    "rollouts": args.rollouts, "weights": args.weights,
-                   "seconds": elapsed},
+                   "opponent": args.weights_b or "heuristic", "seconds": elapsed},
                   open(args.out, "w"), indent=2)
 
 
